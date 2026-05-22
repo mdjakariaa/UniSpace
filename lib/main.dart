@@ -6597,13 +6597,18 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   );
 
   Widget _statusPill(String text, Color color) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+    constraints: const BoxConstraints(minWidth: 70),
     decoration: BoxDecoration(
       color: color.withOpacity(0.12),
       borderRadius: BorderRadius.circular(20),
     ),
+    alignment: Alignment.center,
     child: Text(
       text,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      textAlign: TextAlign.center,
       style: _body(size: 11, color: color, weight: FontWeight.w800),
     ),
   );

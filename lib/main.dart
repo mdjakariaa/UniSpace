@@ -868,10 +868,20 @@ class _AuthScreenState extends State<AuthScreen> {
 class NavEntry {
   final String id;
   final String icon;
+  final IconData? iconData;
+  final IconData? inactiveIconData;
   final String label;
   final String? badge;
   final Color? badgeColor;
-  const NavEntry(this.id, this.icon, this.label, {this.badge, this.badgeColor});
+  const NavEntry(
+    this.id,
+    this.icon,
+    this.label, {
+    this.iconData,
+    this.inactiveIconData,
+    this.badge,
+    this.badgeColor,
+  });
 }
 
 const Map<String, String> fixedTeacherSlots = {
@@ -2056,31 +2066,38 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final isDesktop = constraints.maxWidth >= 900;
+        final showHeader = (_role == UniRole.student && _page == 'home') ||
+            (_role == UniRole.teacher && _page == 'teacher-dashboard') ||
+            (_role == UniRole.admin && _page == 'admin-dashboard');
         return Scaffold(
           body: Stack(
             children: [
               Column(
                 children: [
-                  _topBar(isDesktop: isDesktop),
+                  if (showHeader) _topBar(isDesktop: isDesktop),
                   Expanded(
-                    child: RefreshIndicator(
-                      onRefresh: () => _loadAll(),
-                      color: AppPalette.accent,
-                      backgroundColor: AppPalette.surface,
-                      child: AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 250),
-                        child: SingleChildScrollView(
-                          key: ValueKey(
-                            '$_page-$_loading-${_rooms.length}-${_bookings.length}-${_requests.length}',
+                    child: SafeArea(
+                      top: !showHeader,
+                      bottom: false,
+                      child: RefreshIndicator(
+                        onRefresh: () => _loadAll(),
+                        color: AppPalette.accent,
+                        backgroundColor: AppPalette.surface,
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 250),
+                          child: SingleChildScrollView(
+                            key: ValueKey(
+                              '$_page-$_loading-${_rooms.length}-${_bookings.length}-${_requests.length}',
+                            ),
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            padding: EdgeInsets.fromLTRB(
+                              isDesktop ? 28 : 18,
+                              isDesktop ? 28 : 18,
+                              isDesktop ? 28 : 18,
+                              isDesktop ? 28 : 18,
+                            ),
+                            child: _loading ? _loadingView() : _pageBody(),
                           ),
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          padding: EdgeInsets.fromLTRB(
-                            isDesktop ? 28 : 18,
-                            isDesktop ? 28 : 18,
-                            isDesktop ? 28 : 18,
-                            isDesktop ? 28 : 18,
-                          ),
-                          child: _loading ? _loadingView() : _pageBody(),
                         ),
                       ),
                     ),
@@ -2117,26 +2134,21 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     switch (role) {
       case UniRole.student:
         return [
-          const NavEntry('home', '🏠', 'Home'),
-          const NavEntry('rooms', '🚪', 'Browse Rooms'),
-          const NavEntry('bookings', '📅', 'My Bookings'),
-          const NavEntry('groups', '👥', 'Group Study'),
-          NavEntry(
-            'notifications',
-            '🔔',
-            'Notifications',
-            badge: _unreadCount > 0 ? _unreadCount.toString() : null,
-          ),
-          const NavEntry('profile', '👤', 'Profile'),
+          const NavEntry('home', '🏠', 'Home', iconData: Icons.home_rounded, inactiveIconData: Icons.home_outlined),
+          const NavEntry('rooms', '🚪', 'Browse Rooms', iconData: Icons.meeting_room_rounded, inactiveIconData: Icons.meeting_room_outlined),
+          const NavEntry('bookings', '📅', 'My Bookings', iconData: Icons.calendar_month_rounded, inactiveIconData: Icons.calendar_month_outlined),
+          const NavEntry('groups', '👥', 'Group Study', iconData: Icons.groups_rounded, inactiveIconData: Icons.groups_outlined),
         ];
       case UniRole.teacher:
         return [
-          const NavEntry('teacher-dashboard', '📊', 'Dashboard'),
-          const NavEntry('teacher-bookings', '📋', 'Booking Management'),
+          const NavEntry('teacher-dashboard', '📊', 'Dashboard', iconData: Icons.dashboard_rounded, inactiveIconData: Icons.dashboard_outlined),
+          const NavEntry('teacher-bookings', '📋', 'Booking Management', iconData: Icons.assignment_rounded, inactiveIconData: Icons.assignment_outlined),
           NavEntry(
             'teacher-cancel',
             '🔄',
             'Cancellation Requests',
+            iconData: Icons.swap_horizontal_circle_rounded,
+            inactiveIconData: Icons.swap_horizontal_circle_outlined,
             badge: _pendingRequests.isNotEmpty
                 ? _pendingRequests.length.toString()
                 : null,
@@ -2146,23 +2158,27 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             'notifications',
             '🔔',
             'Notifications',
+            iconData: Icons.notifications_rounded,
+            inactiveIconData: Icons.notifications_outlined,
             badge: _unreadCount > 0 ? _unreadCount.toString() : null,
           ),
         ];
       case UniRole.admin:
         return [
-          const NavEntry('admin-dashboard', '📊', 'Dashboard'),
-          const NavEntry('admin-users', '👥', 'User Management'),
-          const NavEntry('admin-rooms', '🚪', 'Room Management'),
+          const NavEntry('admin-dashboard', '📊', 'Dashboard', iconData: Icons.dashboard_rounded, inactiveIconData: Icons.dashboard_outlined),
+          const NavEntry('admin-users', '👥', 'User Management', iconData: Icons.people_rounded, inactiveIconData: Icons.people_outline_rounded),
+          const NavEntry('admin-rooms', '🚪', 'Room Management', iconData: Icons.meeting_room_rounded, inactiveIconData: Icons.meeting_room_outlined),
           NavEntry(
             'admin-approval',
             '✅',
             'Approval Panel',
+            iconData: Icons.fact_check_rounded,
+            inactiveIconData: Icons.fact_check_outlined,
             badge: _pendingRequests.isNotEmpty
                 ? _pendingRequests.length.toString()
                 : null,
           ),
-          const NavEntry('admin-monitor', '📡', 'Booking Monitor'),
+          const NavEntry('admin-monitor', '📡', 'Booking Monitor', iconData: Icons.monitor_heart_rounded, inactiveIconData: Icons.monitor_heart_outlined),
         ];
     }
   }
@@ -2232,10 +2248,18 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               Stack(
                 clipBehavior: Clip.none,
                 children: [
-                  Text(
-                    item.icon,
-                    style: TextStyle(fontSize: isDesktop ? 19 : 17),
-                  ),
+                  item.iconData != null
+                      ? Icon(
+                          active
+                              ? item.iconData
+                              : (item.inactiveIconData ?? item.iconData),
+                          size: isDesktop ? 22 : 20,
+                          color: active ? AppPalette.accent : AppPalette.text2,
+                        )
+                      : Text(
+                          item.icon,
+                          style: TextStyle(fontSize: isDesktop ? 19 : 17),
+                        ),
                   if (item.badge != null)
                     Positioned(
                       right: -10,
@@ -2589,6 +2613,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   Widget _studentUpcomingBookingCard() {
     final activeList = _activeBookings.where(_bookingIsUpcoming).toList();
     activeList.sort((a, b) {
+      final aTime = _bookingDateTime(a, a.startTime);
+      final bTime = _bookingDateTime(b, b.startTime);
+      if (aTime != null && bTime != null) {
+        return aTime.compareTo(bTime);
+      }
       final dateCompare = a.date.compareTo(b.date);
       if (dateCompare != 0) return dateCompare;
       return a.startTime.compareTo(b.startTime);
@@ -3163,7 +3192,19 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   }
 
   Widget _studentPopularRoomsGrid() {
-    final popularRooms = _rooms.take(3).toList();
+    final bookingCounts = <String, int>{};
+    for (final b in _bookings) {
+      if (!_bookingIsCancelled(b)) {
+        bookingCounts[b.roomId] = (bookingCounts[b.roomId] ?? 0) + 1;
+      }
+    }
+    final sortedRooms = List<RoomInfo>.from(_rooms);
+    sortedRooms.sort((a, b) {
+      final countA = bookingCounts[a.id] ?? 0;
+      final countB = bookingCounts[b.id] ?? 0;
+      return countB.compareTo(countA);
+    });
+    final popularRooms = sortedRooms.take(3).toList();
     if (popularRooms.isEmpty) {
       return Container(
         padding: const EdgeInsets.all(32),
@@ -3219,8 +3260,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             'Computers',
             'Projector',
             '≥ 20 Seats',
-            'Block A',
-            'Block B',
+            'RKB',
+            'RAB',
           ],
           _activeRoomFilter,
           (value) => setState(() => _activeRoomFilter = value),
@@ -3253,13 +3294,13 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             .toList();
       case '≥ 20 Seats':
         return rooms.where((r) => r.capacity >= 20).toList();
-      case 'Block A':
+      case 'RKB':
         return rooms
-            .where((r) => r.building.toLowerCase().contains('a'))
+            .where((r) => r.building.toLowerCase().contains('rkb'))
             .toList();
-      case 'Block B':
+      case 'RAB':
         return rooms
-            .where((r) => r.building.toLowerCase().contains('b'))
+            .where((r) => r.building.toLowerCase().contains('rab'))
             .toList();
       default:
         return rooms;
@@ -6046,122 +6087,129 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             );
           }
 
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+          return LayoutBuilder(
+            builder: (context, constraints) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          AppPalette.accent.withOpacity(0.15),
-                          AppPalette.accent2.withOpacity(0.15),
-                        ],
-                      ),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Text('👥', style: TextStyle(fontSize: 22)),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _heading(group.name, size: 15),
-                        const SizedBox(height: 2),
-                        Text(
-                          group.description,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: _body(size: 12, color: AppPalette.text2),
+                  Row(
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [
+                              AppPalette.accent.withOpacity(0.15),
+                              AppPalette.accent2.withOpacity(0.15),
+                            ],
+                          ),
+                          borderRadius: BorderRadius.circular(12),
                         ),
-                      ],
-                    ),
-                  ),
-                  _statusPill(
-                    isOpen ? 'Open' : 'Full',
-                    isOpen ? AppPalette.accent3 : AppPalette.warn,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              Wrap(
-                spacing: 12,
-                runSpacing: 8,
-                children: [
-                  Text(
-                    '📅 ${group.displayDate}',
-                    style: _body(size: 12, color: AppPalette.text2),
-                  ),
-                  Text(
-                    '🕓 ${group.timeSlot}',
-                    style: _body(size: 12, color: AppPalette.text2),
-                  ),
-                  Text(
-                    '👤 Admin: ${group.adminName}',
-                    style: _body(size: 12, color: AppPalette.text2),
-                  ),
-                  Text(
-                    '📍 ${group.roomName}',
-                    style: _body(size: 12, color: AppPalette.text2),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        child: const Text('👥', style: TextStyle(fontSize: 22)),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            _heading(group.name, size: 15),
+                            const SizedBox(height: 2),
                             Text(
-                              'Members',
-                              style: _body(
-                                size: 11,
-                                color: AppPalette.text3,
-                                weight: FontWeight.w700,
-                              ),
+                              group.description,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: _body(size: 12, color: AppPalette.text2),
                             ),
-                            Text(
-                              '${group.memberCount}/${group.maxMembers}',
-                              style: _body(
-                                size: 11,
-                                color: AppPalette.accent,
-                                weight: FontWeight.w800,
+                          ],
+                        ),
+                      ),
+                      _statusPill(
+                        isOpen ? 'Open' : 'Full',
+                        isOpen ? AppPalette.accent3 : AppPalette.warn,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 8,
+                    children: [
+                      Text(
+                        '📅 ${group.displayDate}',
+                        style: _body(size: 12, color: AppPalette.text2),
+                      ),
+                      Text(
+                        '🕓 ${group.timeSlot}',
+                        style: _body(size: 12, color: AppPalette.text2),
+                      ),
+                      Text(
+                        '👤 Admin: ${group.adminName}',
+                        style: _body(size: 12, color: AppPalette.text2),
+                      ),
+                      Text(
+                        '📍 ${group.roomName}',
+                        style: _body(size: 12, color: AppPalette.text2),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  'Members',
+                                  style: _body(
+                                    size: 11,
+                                    color: AppPalette.text3,
+                                    weight: FontWeight.w700,
+                                  ),
+                                ),
+                                Text(
+                                  '${group.memberCount}/${group.maxMembers}',
+                                  style: _body(
+                                    size: 11,
+                                    color: AppPalette.accent,
+                                    weight: FontWeight.w800,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(99),
+                              child: LinearProgressIndicator(
+                                minHeight: 6,
+                                value: group.maxMembers == 0
+                                    ? 0
+                                    : (group.memberCount / group.maxMembers).clamp(
+                                        0.0,
+                                        1.0,
+                                      ),
+                                backgroundColor: AppPalette.surface2,
+                                color: isOpen ? AppPalette.accent : AppPalette.warn,
                               ),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 6),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(99),
-                          child: LinearProgressIndicator(
-                            minHeight: 6,
-                            value: group.maxMembers == 0
-                                ? 0
-                                : (group.memberCount / group.maxMembers).clamp(
-                                    0.0,
-                                    1.0,
-                                  ),
-                            backgroundColor: AppPalette.surface2,
-                            color: isOpen ? AppPalette.accent : AppPalette.warn,
-                          ),
-                        ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
+                  if (constraints.maxHeight.isFinite)
+                    const Spacer()
+                  else
+                    const SizedBox(height: 20),
+                  action,
                 ],
-              ),
-              const Spacer(),
-              action,
-            ],
+              );
+            },
           );
         },
       ),
@@ -6898,6 +6946,22 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     return LayoutBuilder(
       builder: (context, c) {
         final count = math.max<int>(1, (c.maxWidth / minTileWidth).floor());
+        if (count == 1) {
+          return Padding(
+            padding: EdgeInsets.only(bottom: bottom),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (int i = 0; i < children.length; i++)
+                  Padding(
+                    padding: EdgeInsets.only(bottom: i == children.length - 1 ? 0 : 16),
+                    child: children[i],
+                  ),
+              ],
+            ),
+          );
+        }
         return Padding(
           padding: EdgeInsets.only(bottom: bottom),
           child: GridView.builder(

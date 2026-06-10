@@ -349,8 +349,7 @@ final groupRoomSlotAvailabilityProvider = StreamProvider.autoDispose
   final bookingStream = client
       .from('bookings')
       .stream(primaryKey: ['id'])
-      .eq('room_id', query.roomId)
-      .eq('date', query.dateString);
+      .eq('room_id', query.roomId);
 
   await for (final _ in bookingStream) {
     yield await load();

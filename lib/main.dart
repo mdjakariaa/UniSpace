@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:unispace/core/constants/supabase_constants.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -2525,67 +2526,699 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     );
   }
 
+  Widget _studentHomeGreetingHeader() {
+    final now = DateTime.now();
+    final hour = now.hour;
+    String greeting;
+    if (hour >= 5 && hour < 12) {
+      greeting = 'Good morning ☀️';
+    } else if (hour >= 12 && hour < 17) {
+      greeting = 'Good afternoon 🌤️';
+    } else {
+      greeting = 'Good evening 🌙';
+    }
+
+    final weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    final months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+    final dateStr = '${weekdays[now.weekday - 1]}, ${months[now.month - 1]} ${now.day}';
+    final userName = widget.user.fullName.split(' ').first;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 24),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  dateStr.toUpperCase(),
+                  style: _body(
+                    size: 11,
+                    color: AppPalette.accent,
+                    weight: FontWeight.w800,
+                  ).copyWith(letterSpacing: 1.2),
+                ),
+                const SizedBox(height: 6),
+                _heading(
+                  '$greeting,\n$userName',
+                  size: 26,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Let\'s find your perfect study spot.',
+                  style: _body(size: 13, color: AppPalette.text2),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          GestureDetector(
+            onTap: () => _navigate('profile'),
+            child: Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [AppPalette.accent, AppPalette.accent2],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppPalette.accent.withOpacity(0.25),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Center(
+                child: Text(
+                  widget.user.fullName.isNotEmpty ? widget.user.fullName[0].toUpperCase() : 'S',
+                  style: GoogleFonts.syne(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _studentUpcomingBookingCard() {
+    final activeList = List<BookingInfo>.from(_activeBookings);
+    activeList.sort((a, b) {
+      final dateCompare = a.date.compareTo(b.date);
+      if (dateCompare != 0) return dateCompare;
+      return a.startTime.compareTo(b.startTime);
+    });
+
+    if (activeList.isEmpty) {
+      return Container(
+        margin: const EdgeInsets.only(bottom: 24),
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: AppPalette.surface,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: AppPalette.border),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppPalette.accent.withOpacity(0.08),
+                shape: BoxShape.circle,
+              ),
+              child: const Text('📚', style: TextStyle(fontSize: 24)),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'No Upcoming Bookings',
+                    style: _body(
+                      size: 15,
+                      color: AppPalette.text,
+                      weight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Secure a seat or study room right away to focus.',
+                    style: _body(size: 12, color: AppPalette.text2, height: 1.3),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            ElevatedButton(
+              onPressed: () => _navigate('rooms'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppPalette.accent,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                elevation: 0,
+              ),
+              child: Text(
+                'Book Now',
+                style: _body(size: 12, color: Colors.white, weight: FontWeight.w700),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final booking = activeList.first;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 24),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        gradient: LinearGradient(
+          colors: [
+            AppPalette.accent.withOpacity(0.12),
+            AppPalette.accent2.withOpacity(0.06),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        border: Border.all(color: AppPalette.accent.withOpacity(0.25), width: 1.2),
+        boxShadow: [
+          BoxShadow(
+            color: AppPalette.accent.withOpacity(0.05),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        children: [
+          Positioned(
+            right: -30,
+            bottom: -30,
+            child: Icon(
+              Icons.stars_rounded,
+              size: 120,
+              color: AppPalette.accent.withOpacity(0.08),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: AppPalette.accent.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: AppPalette.accent.withOpacity(0.3), width: 1),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: const BoxDecoration(
+                              color: AppPalette.accent3,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            'UPCOMING SESSION',
+                            style: _body(
+                              size: 9,
+                              color: AppPalette.accent,
+                              weight: FontWeight.w800,
+                            ).copyWith(letterSpacing: 0.8),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Text(
+                      _dateDisplay(booking.date),
+                      style: _body(
+                        size: 12,
+                        color: AppPalette.text,
+                        weight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: AppPalette.surface.withOpacity(0.8),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppPalette.border),
+                      ),
+                      child: const Text('🚪', style: TextStyle(fontSize: 22)),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            booking.roomName,
+                            style: _body(
+                              size: 16,
+                              color: AppPalette.text,
+                              weight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              Text(
+                                '📍 ${booking.roomLocation}',
+                                style: _body(size: 12, color: AppPalette.text2),
+                              ),
+                              const SizedBox(width: 10),
+                              Text(
+                                '⏰ ${booking.timeSlot}',
+                                style: _body(size: 12, color: AppPalette.text2),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Divider(color: AppPalette.border, height: 1),
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      booking.seatsBooked > 1 ? '${booking.seatsBooked} Seats Reserved' : 'Seat Reserved',
+                      style: _body(
+                        size: 12,
+                        color: AppPalette.text2,
+                        weight: FontWeight.w600,
+                      ),
+                    ),
+                    ElevatedButton.icon(
+                      onPressed: () async {
+                        try {
+                          final slip = await _repo.fetchBookingSlip(booking.id);
+                          if (mounted) _showBookingSlip(slip);
+                        } catch (e) {
+                          _showToast('⚠️ Could not load booking slip');
+                        }
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: AppPalette.bg,
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        elevation: 0,
+                      ),
+                      icon: const Icon(Icons.receipt_long_rounded, size: 14),
+                      label: Text(
+                        'View Slip',
+                        style: _body(
+                          size: 11,
+                          color: AppPalette.bg,
+                          weight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _studentLiveOccupancyCard() {
+    final totalSeats = _rooms.fold<int>(0, (sum, r) => sum + r.capacity);
+    final occupiedSeats = _rooms.fold<int>(0, (sum, r) => sum + (r.capacity - r.available));
+    final occupancyPercent = totalSeats > 0 ? (occupiedSeats / totalSeats).clamp(0.0, 1.0) : 0.0;
+    final displayPercent = (occupancyPercent * 100).round();
+
+    Color statusColor;
+    String statusTitle;
+    String statusDesc;
+
+    if (occupancyPercent <= 0.4) {
+      statusColor = AppPalette.accent3;
+      statusTitle = 'Low Campus Traffic';
+      statusDesc = 'Plenty of quiet rooms and study seats available right now.';
+    } else if (occupancyPercent <= 0.75) {
+      statusColor = AppPalette.warn;
+      statusTitle = 'Moderate Traffic';
+      statusDesc = 'Most spaces have seats, but book ahead to secure a spot.';
+    } else {
+      statusColor = AppPalette.danger;
+      statusTitle = 'High Campus Traffic';
+      statusDesc = 'Spaces are filling up quickly. Find and secure a seat now.';
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 24),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppPalette.surface,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppPalette.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                '📶 LIVE CAMPUS CAPACITY',
+                style: _body(
+                  size: 11,
+                  color: AppPalette.text2,
+                  weight: FontWeight.w700,
+                ).copyWith(letterSpacing: 1.0),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: statusColor.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  '$displayPercent% Occupied',
+                  style: _body(
+                    size: 11,
+                    color: statusColor,
+                    weight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            statusTitle,
+            style: _body(
+              size: 15,
+              color: AppPalette.text,
+              weight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            statusDesc,
+            style: _body(
+              size: 12,
+              color: AppPalette.text2,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 14),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: LinearProgressIndicator(
+              value: occupancyPercent,
+              minHeight: 8,
+              backgroundColor: AppPalette.surface2,
+              valueColor: AlwaysStoppedAnimation<Color>(statusColor),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Total Seats: $totalSeats',
+                style: _body(size: 11, color: AppPalette.text2),
+              ),
+              Text(
+                'Occupied: $occupiedSeats',
+                style: _body(size: 11, color: AppPalette.text2),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _studentQuickActionsGrid() {
+    final items = [
+      (
+        label: 'Find a Room',
+        desc: 'Browse & book seats',
+        emoji: '🚪',
+        color: AppPalette.accent,
+        page: 'rooms',
+      ),
+      (
+        label: 'My Schedule',
+        desc: 'View reservations',
+        emoji: '📅',
+        color: AppPalette.warn,
+        page: 'bookings',
+      ),
+      (
+        label: 'Study Groups',
+        desc: 'Collaborate with peers',
+        emoji: '👥',
+        color: AppPalette.accent2,
+        page: 'groups',
+      ),
+      (
+        label: 'Notifications',
+        desc: 'Check alerts',
+        emoji: '🔔',
+        color: AppPalette.accent3,
+        page: 'notifications',
+      ),
+    ];
+
+    return _responsiveGrid(
+      minTileWidth: 160,
+      aspectRatio: 1.32,
+      bottom: 24,
+      children: items.map((item) {
+        return InkWell(
+          onTap: () => _navigate(item.page),
+          borderRadius: BorderRadius.circular(20),
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppPalette.surface2,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: AppPalette.border),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: item.color.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    item.emoji,
+                    style: const TextStyle(fontSize: 20),
+                  ),
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.label,
+                      style: _body(
+                        size: 13,
+                        color: AppPalette.text,
+                        weight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      item.desc,
+                      style: _body(
+                        size: 11,
+                        color: AppPalette.text2,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _studentPopularRoomCard(RoomInfo room) {
+    final isAvailable = !room.isFull && !room.isPending;
+    final occupancyPercent = room.capacity > 0
+        ? ((room.capacity - room.available) / room.capacity * 100).round()
+        : 0;
+
+    return InkWell(
+      onTap: () => _openBooking(room),
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppPalette.surface,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: AppPalette.border),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              height: 100,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: room.colors.isNotEmpty 
+                    ? room.colors 
+                    : [AppPalette.accent.withOpacity(0.4), AppPalette.accent2.withOpacity(0.4)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+              ),
+              child: Stack(
+                children: [
+                  Center(
+                    child: Text(room.icon, style: const TextStyle(fontSize: 36)),
+                  ),
+                  Positioned(
+                    top: 10,
+                    right: 10,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: (isAvailable ? AppPalette.accent3 : AppPalette.danger).withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        isAvailable ? 'Available' : 'Full',
+                        style: _body(
+                          size: 10,
+                          color: isAvailable ? AppPalette.accent3 : AppPalette.danger,
+                          weight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    room.name,
+                    style: _body(size: 14, color: AppPalette.text, weight: FontWeight.w700),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '📍 ${room.location}',
+                    style: _body(size: 11, color: AppPalette.text2),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Capacity: ${room.capacity}',
+                        style: _body(size: 10, color: AppPalette.text2),
+                      ),
+                      Text(
+                        '⭐ ${room.rating.toStringAsFixed(1)}',
+                        style: _body(size: 10, color: AppPalette.warn, weight: FontWeight.w700),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: room.capacity > 0 ? (room.capacity - room.available) / room.capacity : 0,
+                      minHeight: 3,
+                      backgroundColor: AppPalette.surface2,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        occupancyPercent > 80
+                            ? AppPalette.danger
+                            : occupancyPercent > 50
+                                ? AppPalette.warn
+                                : AppPalette.accent3,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _studentPopularRoomsGrid() {
+    final popularRooms = _rooms.take(3).toList();
+    if (popularRooms.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(32),
+        alignment: Alignment.center,
+        child: Text(
+          'No rooms available currently.',
+          style: _body(color: AppPalette.text2),
+        ),
+      );
+    }
+    return _responsiveGrid(
+      minTileWidth: 200,
+      aspectRatio: 1.1,
+      bottom: 24,
+      children: popularRooms.map((room) => _studentPopularRoomCard(room)).toList(),
+    );
+  }
+
   Widget _studentHome() {
-    final availableRooms = _rooms
-        .where((r) => !r.isFull && !r.isPending)
-        .length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _hero(
-          label: 'Welcome back 👋',
-          title: 'Good Morning,\n${widget.user.fullName}',
-          subtitle:
-              '$availableRooms rooms available right now. Your next booking and group sessions are synced with Supabase.',
-          stats: [
-            ('${_rooms.length}', 'Total Rooms', AppPalette.accent),
-            ('$availableRooms', 'Available Now', AppPalette.accent3),
-            ('${_activeBookings.length}', 'My Bookings', AppPalette.warn),
-          ],
+        _studentHomeGreetingHeader(),
+        _studentUpcomingBookingCard(),
+        _studentLiveOccupancyCard(),
+        _sectionHeader(
+          '⚡ Quick Shortcuts',
         ),
-        _statGrid([
-          _statCard(
-            '🚪',
-            '${_rooms.length}',
-            'Total Rooms',
-            'Live from database',
-            AppPalette.accent,
-          ),
-          _statCard(
-            '✅',
-            '$availableRooms',
-            'Available Rooms',
-            'Realtime updates',
-            AppPalette.accent3,
-          ),
-          _statCard(
-            '👥',
-            '${_groups.length}',
-            'Study Groups',
-            'Create or join groups',
-            AppPalette.accent2,
-          ),
-          _statCard(
-            '📅',
-            '${_activeBookings.length}',
-            'Upcoming Bookings',
-            'Seat-based bookings',
-            AppPalette.warn,
-          ),
-        ]),
+        _studentQuickActionsGrid(),
         _sectionHeader(
           '🔥 Popular Rooms Right Now',
           action: 'View All →',
           onAction: () => _navigate('rooms'),
         ),
-        _rooms.isEmpty
-            ? _emptyState(
-                'No rooms found',
-                'Ask Admin to add rooms from Room Management.',
-              )
-            : _roomGrid(_rooms.take(3).toList()),
+        _studentPopularRoomsGrid(),
       ],
-    );
+    ).animate().fadeIn(duration: 450.ms).slideY(begin: 0.03, curve: Curves.easeOutCubic);
   }
 
   Widget _roomsPage() {

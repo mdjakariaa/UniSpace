@@ -75,11 +75,15 @@ class _UserManagementScreenState extends ConsumerState<UserManagementScreen> {
                   data: (users) {
                     var filtered = users.toList();
                     if (_roleFilter != 'all') filtered = filtered.where((u) => u.role.name == _roleFilter).toList();
-                    if (_searchQuery.isNotEmpty) filtered = filtered.where((u) =>
+                    if (_searchQuery.isNotEmpty) {
+                      filtered = filtered.where((u) =>
                       u.fullName.toLowerCase().contains(_searchQuery) || u.email.toLowerCase().contains(_searchQuery)).toList();
-                    if (filtered.isEmpty) return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    }
+                    if (filtered.isEmpty) {
+                      return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
                       Icon(Icons.people_outline_rounded, size: 64, color: AppColors.textHint.withOpacity(0.4)),
                       const SizedBox(height: 16), Text('No users found', style: AppTextStyles.bodyMedium)]));
+                    }
                     return ListView.builder(
                       padding: const EdgeInsets.symmetric(horizontal: 24),
                       itemCount: filtered.length,

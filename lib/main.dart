@@ -281,7 +281,7 @@ class AuthLoadingScreen extends StatelessWidget {
             const SizedBox(height: 18),
             Text(
               'UniSpace',
-              style: GoogleFonts.syne(
+              style: GoogleFonts.plusJakartaSans(
                 fontSize: 28,
                 fontWeight: FontWeight.w800,
                 color: AppPalette.text,
@@ -476,7 +476,7 @@ class _AuthScreenState extends State<AuthScreen> {
                       Text(
                         _isSignup ? 'Create Account' : 'Welcome Back',
                         textAlign: TextAlign.center,
-                        style: GoogleFonts.syne(
+                        style: GoogleFonts.plusJakartaSans(
                           fontSize: 30,
                           fontWeight: FontWeight.w800,
                           color: AppPalette.text,
@@ -533,7 +533,7 @@ class _AuthScreenState extends State<AuthScreen> {
               AppPalette.mainGradient.createShader(bounds),
           child: Text(
             'UniSpace',
-            style: GoogleFonts.syne(
+            style: GoogleFonts.plusJakartaSans(
               fontSize: 32,
               fontWeight: FontWeight.w800,
               color: Colors.white,
@@ -1879,6 +1879,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   List<AppNotification> _notifications = [];
   List<UserProfile> _users = [];
   List<RoomRequestInfo> _requests = [];
+  List<SlotAvailability> _todaySlots = [];
 
   Map<String, UserProfile> get _userMap => {for (final u in _users) u.id: u};
   int get _unreadCount => _notifications.where((n) => !n.isRead).length;
@@ -1993,6 +1994,16 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       final requests = _role == UniRole.teacher || _role == UniRole.admin
           ? await _repo.fetchRequests(_role, userMap)
           : <RoomRequestInfo>[];
+      final List<SlotAvailability> todaySlots;
+      if (rooms.isNotEmpty) {
+        final todaySlotsList = await Future.wait(
+          rooms.map((r) => _repo.fetchSlotAvailability(roomId: r.id, date: DateTime.now()))
+        );
+        todaySlots = todaySlotsList.expand((s) => s).toList();
+      } else {
+        todaySlots = [];
+      }
+
       if (!mounted) return;
       setState(() {
         _users = users;
@@ -2001,6 +2012,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         _groups = groups;
         _notifications = notifications;
         _requests = requests;
+        _todaySlots = todaySlots;
         _error = null;
         _loading = false;
       });
@@ -2548,66 +2560,26 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
 
     return Container(
       margin: const EdgeInsets.only(bottom: 24),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  dateStr.toUpperCase(),
-                  style: _body(
-                    size: 11,
-                    color: AppPalette.accent,
-                    weight: FontWeight.w800,
-                  ).copyWith(letterSpacing: 1.2),
-                ),
-                const SizedBox(height: 6),
-                _heading(
-                  '$greeting,\n$userName',
-                  size: 26,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Let\'s find your perfect study spot.',
-                  style: _body(size: 13, color: AppPalette.text2),
-                ),
-              ],
-            ),
+          Text(
+            dateStr.toUpperCase(),
+            style: _body(
+              size: 11,
+              color: AppPalette.accent,
+              weight: FontWeight.w800,
+            ).copyWith(letterSpacing: 1.2),
           ),
-          const SizedBox(width: 12),
-          GestureDetector(
-            onTap: () => _navigate('profile'),
-            child: Container(
-              width: 52,
-              height: 52,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [AppPalette.accent, AppPalette.accent2],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: AppPalette.accent.withOpacity(0.25),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Center(
-                child: Text(
-                  widget.user.fullName.isNotEmpty ? widget.user.fullName[0].toUpperCase() : 'S',
-                  style: GoogleFonts.syne(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            ),
+          const SizedBox(height: 6),
+          _heading(
+            '$greeting,\n$userName',
+            size: 26,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Let\'s find your perfect study spot.',
+            style: _body(size: 13, color: AppPalette.text2),
           ),
         ],
       ),
@@ -2615,7 +2587,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   }
 
   Widget _studentUpcomingBookingCard() {
-    final activeList = List<BookingInfo>.from(_activeBookings);
+    final activeList = _activeBookings.where(_bookingIsUpcoming).toList();
     activeList.sort((a, b) {
       final dateCompare = a.date.compareTo(b.date);
       if (dateCompare != 0) return dateCompare;
@@ -2864,8 +2836,18 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   }
 
   Widget _studentLiveOccupancyCard() {
-    final totalSeats = _rooms.fold<int>(0, (sum, r) => sum + r.capacity);
-    final occupiedSeats = _rooms.fold<int>(0, (sum, r) => sum + (r.capacity - r.available));
+    final openSlots = _todaySlots.where((slot) =>
+      slot.status != 'blocked_by_admin' && slot.status != 'cancellation_pending'
+    ).toList();
+
+    final totalSeatsFallback = _rooms.fold<int>(0, (sum, r) => sum + r.capacity) * 8;
+    final totalSeats = _todaySlots.isEmpty
+        ? totalSeatsFallback
+        : openSlots.fold<int>(0, (sum, s) => sum + s.totalSeats);
+    final occupiedSeats = _todaySlots.isEmpty
+        ? 0
+        : openSlots.fold<int>(0, (sum, s) => sum + s.bookedSeats);
+
     final occupancyPercent = totalSeats > 0 ? (occupiedSeats / totalSeats).clamp(0.0, 1.0) : 0.0;
     final displayPercent = (occupancyPercent * 100).round();
 
@@ -6519,7 +6501,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                         children: [
                           Text(
                             s.$1,
-                            style: GoogleFonts.syne(
+                            style: GoogleFonts.plusJakartaSans(
                               fontSize: 24,
                               fontWeight: FontWeight.w800,
                               color: s.$3,
@@ -6580,7 +6562,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             const SizedBox(height: 12),
             Text(
               value,
-              style: GoogleFonts.syne(
+              style: GoogleFonts.plusJakartaSans(
                 fontSize: 28,
                 fontWeight: FontWeight.w800,
                 color: AppPalette.text,
@@ -6697,7 +6679,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                       children: [
                         Text(
                           '$pct%',
-                          style: GoogleFonts.syne(
+                          style: GoogleFonts.plusJakartaSans(
                             fontSize: 18,
                             fontWeight: FontWeight.w800,
                           ),
@@ -6948,7 +6930,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         const SizedBox(height: 2),
         Text(
           value,
-          style: GoogleFonts.syne(
+          style: GoogleFonts.plusJakartaSans(
             fontSize: small ? 13 : 20,
             fontWeight: FontWeight.w800,
             color: color ?? AppPalette.text,
@@ -7250,7 +7232,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     children: [
       Text(
         value,
-        style: GoogleFonts.syne(
+        style: GoogleFonts.plusJakartaSans(
           fontSize: 20,
           fontWeight: FontWeight.w800,
           color: AppPalette.accent,
@@ -7384,7 +7366,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     shaderCallback: (bounds) => AppPalette.mainGradient.createShader(bounds),
     child: Text(
       text,
-      style: GoogleFonts.syne(
+      style: GoogleFonts.plusJakartaSans(
         fontSize: size,
         fontWeight: weight,
         color: Colors.white,
@@ -7394,7 +7376,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
 
   Widget _heading(String text, {double size = 18}) => Text(
     text,
-    style: GoogleFonts.syne(
+    style: GoogleFonts.plusJakartaSans(
       fontSize: size,
       fontWeight: FontWeight.w800,
       color: AppPalette.text,

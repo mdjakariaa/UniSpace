@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -1848,6 +1849,13 @@ class UniSpaceRepository {
         .eq('id', userId);
   }
 
+  Future<void> deleteUser(String userId) async {
+    // Delete user's bookings first, then profile
+    await client.from('bookings').delete().eq('user_id', userId);
+    await client.from('notifications').delete().eq('user_id', userId);
+    await client.from('profiles').delete().eq('id', userId);
+  }
+
   Future<void> markNotificationRead(String id) async {
     await client.from('notifications').update({'is_read': true}).eq('id', id);
   }
@@ -3641,84 +3649,461 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   }
 
   Widget _adminDashboard() {
-    final bookingsToday = _bookings
-        .where((b) => b.date == _isoDate(DateTime.now()))
-        .length;
+    final now = DateTime.now();
+    final hour = now.hour;
+    String greeting;
+    if (hour >= 5 && hour < 12) {
+      greeting = 'Good morning';
+    } else if (hour >= 12 && hour < 17) {
+      greeting = 'Good afternoon';
+    } else {
+      greeting = 'Good evening';
+    }
+    final adminName = widget.user.fullName.split(' ').first;
+
+    final weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final dateStr = '${weekdays[now.weekday - 1]}, ${months[now.month - 1]} ${now.day}, ${now.year}';
+
+    final bookingsToday = _bookings.where((b) => b.date == _isoDate(DateTime.now())).length;
+    final bookingsThisWeek = List.generate(7, (i) => DateTime.now().subtract(Duration(days: 6 - i)))
+        .fold<int>(0, (sum, d) => sum + _bookings.where((b) => b.date == _isoDate(d)).length);
+    final activeUsers = _users.where((u) => u.status == 'active').length;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _hero(
-          label: 'Admin Control Center 🛠️',
-          title: 'UniSpace Admin',
-          subtitle:
-              'Full system control — manage users, rooms, approvals, and booking analytics.',
-          accent: AppPalette.accent2,
-          stats: [
-            ('${_users.length}', 'Total Users', AppPalette.accent2),
-            ('${_rooms.length}', 'Rooms', AppPalette.accent),
-            (
-              '${_pendingRequests.length}',
-              'Pending Approvals',
-              AppPalette.danger,
-            ),
-          ],
+
+        // ── Greeting Header ──────────────────────────────────────────
+        Container(
+          margin: const EdgeInsets.only(bottom: 28),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      dateStr.toUpperCase(),
+                      style: _body(size: 11, color: AppPalette.accent2, weight: FontWeight.w800)
+                          .copyWith(letterSpacing: 1.2),
+                    ),
+                    const SizedBox(height: 6),
+                    RichText(
+                      text: TextSpan(
+                        children: [
+                          TextSpan(
+                            text: '$greeting, ',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 26, fontWeight: FontWeight.w400, color: AppPalette.text,
+                            ),
+                          ),
+                          TextSpan(
+                            text: adminName,
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 26, fontWeight: FontWeight.w800, color: AppPalette.text,
+                            ),
+                          ),
+                          const TextSpan(text: ' 🛠️', style: TextStyle(fontSize: 22)),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Here\'s your system overview for today.',
+                      style: _body(size: 13, color: AppPalette.text2),
+                    ),
+                  ],
+                ),
+              ),
+              // Live indicator badge
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  color: AppPalette.accent3.withOpacity(0.10),
+                  borderRadius: BorderRadius.circular(30),
+                  border: Border.all(color: AppPalette.accent3.withOpacity(0.30)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 7, height: 7,
+                      decoration: const BoxDecoration(color: AppPalette.accent3, shape: BoxShape.circle),
+                    ),
+                    const SizedBox(width: 7),
+                    Text('Live', style: _body(size: 12, color: AppPalette.accent3, weight: FontWeight.w700)),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
-        _statGrid([
-          _statCard(
-            '👥',
-            '${_users.length}',
-            'Total Users',
-            'Role-based profiles',
-            AppPalette.accent2,
+
+        // ── 4 Stat Cards ─────────────────────────────────────────────
+        LayoutBuilder(
+          builder: (ctx, c) {
+            final cols = c.maxWidth > 700 ? 4 : c.maxWidth > 440 ? 2 : 1;
+            return GridView.count(
+              crossAxisCount: cols,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              mainAxisSpacing: 14,
+              crossAxisSpacing: 14,
+              childAspectRatio: cols >= 4 ? 1.45 : 1.7,
+              children: [
+                _adminStatCard(
+                  icon: Icons.people_alt_rounded,
+                  iconColor: AppPalette.accent2,
+                  value: '${_users.length}',
+                  label: 'Total Users',
+                  sub: '$activeUsers active',
+                  subColor: AppPalette.accent3,
+                ),
+                _adminStatCard(
+                  icon: Icons.meeting_room_rounded,
+                  iconColor: AppPalette.accent,
+                  value: '${_rooms.length}',
+                  label: 'Total Rooms',
+                  sub: 'In system',
+                  subColor: AppPalette.text2,
+                ),
+                _adminStatCard(
+                  icon: Icons.today_rounded,
+                  iconColor: AppPalette.accent3,
+                  value: '$bookingsToday',
+                  label: 'Bookings Today',
+                  sub: '$bookingsThisWeek this week',
+                  subColor: AppPalette.text2,
+                ),
+                _adminStatCard(
+                  icon: Icons.pending_actions_rounded,
+                  iconColor: AppPalette.warn,
+                  value: '${_pendingRequests.length}',
+                  label: 'Pending Approvals',
+                  sub: _pendingRequests.isEmpty ? 'All clear' : 'Needs review',
+                  subColor: _pendingRequests.isEmpty ? AppPalette.accent3 : AppPalette.warn,
+                  highlight: _pendingRequests.isNotEmpty,
+                ),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 24),
+
+        // ── Quick Actions ─────────────────────────────────────────────
+        Container(
+          margin: const EdgeInsets.only(bottom: 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'QUICK ACTIONS',
+                style: _body(size: 11, color: AppPalette.text3, weight: FontWeight.w800)
+                    .copyWith(letterSpacing: 1.4),
+              ),
+              const SizedBox(height: 12),
+              LayoutBuilder(
+                builder: (ctx, c) {
+                  final cols = c.maxWidth > 600 ? 4 : 2;
+                  return GridView.count(
+                    crossAxisCount: cols,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    mainAxisSpacing: 12,
+                    crossAxisSpacing: 12,
+                    childAspectRatio: c.maxWidth > 600 ? 2.6 : 2.2,
+                    children: [
+                      _quickActionCard(
+                        icon: Icons.people_rounded,
+                        label: 'User Management',
+                        color: AppPalette.accent2,
+                        onTap: () => _navigate('admin-users'),
+                      ),
+                      _quickActionCard(
+                        icon: Icons.meeting_room_rounded,
+                        label: 'Room Management',
+                        color: AppPalette.accent,
+                        onTap: () => _navigate('admin-rooms'),
+                      ),
+                      _quickActionCard(
+                        icon: Icons.fact_check_rounded,
+                        label: 'Approval Panel',
+                        color: _pendingRequests.isNotEmpty ? AppPalette.warn : AppPalette.accent3,
+                        badge: _pendingRequests.isNotEmpty ? '${_pendingRequests.length}' : null,
+                        onTap: () => _navigate('admin-approval'),
+                      ),
+                      _quickActionCard(
+                        icon: Icons.monitor_heart_rounded,
+                        label: 'Booking Monitor',
+                        color: AppPalette.accent,
+                        onTap: () => _navigate('admin-monitor'),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ],
           ),
-          _statCard(
-            '🚪',
-            '${_rooms.length}',
-            'Total Rooms',
-            'Room database',
-            AppPalette.accent,
-          ),
-          _statCard(
-            '📅',
-            '$bookingsToday',
-            'Bookings Today',
-            'Live monitor',
-            AppPalette.accent3,
-          ),
-          _statCard(
-            '⏳',
-            '${_pendingRequests.length}',
-            'Pending Approvals',
-            'Review needed',
-            AppPalette.warn,
-            down: _pendingRequests.isNotEmpty,
-          ),
-        ]),
+        ),
+
+        // ── Charts Row ───────────────────────────────────────────────
         LayoutBuilder(
           builder: (context, c) {
-            final wide = c.maxWidth > 850;
+            final wide = c.maxWidth > 750;
             final children = [_barChart(), _donutChart()];
             return wide
                 ? Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(flex: 7, child: children[0]),
-                      const SizedBox(width: 16),
-                      Expanded(flex: 5, child: children[1]),
+                      Expanded(flex: 6, child: children[0]),
+                      const SizedBox(width: 14),
+                      Expanded(flex: 4, child: children[1]),
                     ],
                   )
                 : Column(
                     children: [
                       children[0],
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 14),
                       children[1],
                     ],
                   );
           },
         ),
+        const SizedBox(height: 24),
+
+        // ── Recent Activity ──────────────────────────────────────────
+        _adminRecentActivity(),
+        const SizedBox(height: 8),
       ],
     );
   }
+
+  Widget _adminStatCard({
+    required IconData icon,
+    required Color iconColor,
+    required String value,
+    required String label,
+    required String sub,
+    required Color subColor,
+    bool highlight = false,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppPalette.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: highlight ? iconColor.withOpacity(0.40) : AppPalette.border,
+          width: highlight ? 1.4 : 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: highlight ? iconColor.withOpacity(0.08) : Colors.black.withOpacity(0.10),
+            blurRadius: 18,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: iconColor.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, color: iconColor, size: 18),
+              ),
+              if (highlight)
+                Container(
+                  width: 8, height: 8,
+                  decoration: BoxDecoration(color: iconColor, shape: BoxShape.circle),
+                ),
+            ],
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                value,
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 26,
+                  fontWeight: FontWeight.w800,
+                  color: AppPalette.text,
+                  height: 1,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(label, style: _body(size: 12, color: AppPalette.text2)),
+              const SizedBox(height: 4),
+              Text(sub, style: _body(size: 11, color: subColor, weight: FontWeight.w600)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _quickActionCard({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+    String? badge,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: AppPalette.surface,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: color.withOpacity(0.22)),
+          boxShadow: [
+            BoxShadow(
+              color: color.withOpacity(0.06),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(7),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(icon, color: color, size: 16),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                label,
+                style: _body(size: 12, weight: FontWeight.w700),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (badge != null) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(badge, style: _body(size: 10, color: Colors.white, weight: FontWeight.w800)),
+              ),
+            ] else
+              Icon(Icons.arrow_forward_ios_rounded, size: 12, color: AppPalette.text3),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _adminRecentActivity() {
+    final recent = _bookings.take(6).toList();
+    return _SurfaceCard(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _heading('🕐 Recent Activity', size: 14),
+              InkWell(
+                onTap: () => _navigate('admin-monitor'),
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  child: Text(
+                    'View all →',
+                    style: _body(size: 12, color: AppPalette.accent, weight: FontWeight.w700),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          if (recent.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              child: Center(
+                child: Text('No bookings yet', style: _body(size: 13, color: AppPalette.text2)),
+              ),
+            )
+          else
+            ...recent.asMap().entries.map((e) {
+              final i = e.key;
+              final b = e.value;
+              final isActive = b.status == 'active' || b.status == 'confirmed';
+              final statusColor = isActive
+                  ? AppPalette.accent3
+                  : b.status == 'cancelled'
+                      ? AppPalette.danger
+                      : b.status == 'pending'
+                          ? AppPalette.warn
+                          : AppPalette.text2;
+              return Container(
+                padding: const EdgeInsets.symmetric(vertical: 11),
+                decoration: BoxDecoration(
+                  border: i < recent.length - 1
+                      ? const Border(bottom: BorderSide(color: AppPalette.border))
+                      : null,
+                ),
+                child: Row(
+                  children: [
+                    _avatar(_initials(b.userName), size: 34, radius: 9),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            b.userName,
+                            style: _body(size: 13, weight: FontWeight.w700),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            '${b.roomName} · ${b.displayDate}',
+                            style: _body(size: 11, color: AppPalette.text2),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: statusColor.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        b.status[0].toUpperCase() + b.status.substring(1),
+                        style: _body(size: 10, color: statusColor, weight: FontWeight.w700),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+        ],
+      ),
+    );
+  }
+
 
   Widget _adminUsers() {
     return Column(
@@ -4016,7 +4401,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   Widget _userTable() {
     return _tableCard(
       headers: const ['User', 'Role', 'Bookings', 'Status', 'Actions'],
-      flexes: const [3, 1, 1, 1, 1],
+      flexes: const [3, 1, 1, 1, 2],
       rows: _users.map((u) {
         final count = _bookings.where((b) => b.userId == u.id).length;
         final isActive = u.status == 'active';
@@ -4028,7 +4413,14 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             isActive ? '● Active' : '◌ Inactive',
             isActive ? AppPalette.accent3 : AppPalette.warn,
           ),
-          _actionButton('Edit', AppPalette.accent, () => _showUserDialog(u)),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              _actionButton('Edit', AppPalette.accent, () => _showUserDialog(u)),
+              _actionButton('Delete', AppPalette.danger, () => _confirmDeleteUser(u)),
+            ],
+          ),
         ];
       }).toList(),
     );
@@ -5644,6 +6036,10 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       builder: (context) => StatefulBuilder(
         builder: (context, setModalState) => AlertDialog(
           backgroundColor: AppPalette.surface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: const BorderSide(color: AppPalette.border),
+          ),
           title: Text(
             'Edit User',
             style: _body(size: 18, weight: FontWeight.w800),
@@ -5685,6 +6081,35 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   ],
                   onChanged: (v) => setModalState(() => status = v ?? status),
                 ),
+                const SizedBox(height: 20),
+                // Delete User button
+                InkWell(
+                  onTap: () {
+                    Navigator.pop(context);
+                    _confirmDeleteUser(user);
+                  },
+                  borderRadius: BorderRadius.circular(10),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    decoration: BoxDecoration(
+                      color: AppPalette.danger.withOpacity(0.10),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: AppPalette.danger.withOpacity(0.30)),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.delete_outline_rounded, color: AppPalette.danger, size: 18),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Delete User',
+                          style: _body(size: 13, color: AppPalette.danger, weight: FontWeight.w700),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -5701,6 +6126,121 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         ),
       ),
     );
+  }
+
+  Future<void> _confirmDeleteUser(UserProfile user) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.75),
+      builder: (context) => AlertDialog(
+        backgroundColor: AppPalette.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: const BorderSide(color: AppPalette.border),
+        ),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppPalette.danger.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(Icons.warning_amber_rounded, color: AppPalette.danger, size: 22),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              'Delete User',
+              style: _body(size: 18, weight: FontWeight.w800),
+            ),
+          ],
+        ),
+        content: SizedBox(
+          width: 380,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Are you sure you want to permanently delete this user?',
+                style: _body(size: 14, color: AppPalette.text2, height: 1.5),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: AppPalette.surface2,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppPalette.border),
+                ),
+                child: Row(
+                  children: [
+                    _avatar(user.initials, size: 38, radius: 10),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(user.fullName, style: _body(size: 14, weight: FontWeight.w700)),
+                          Text(user.email, style: _body(size: 12, color: AppPalette.text2)),
+                          const SizedBox(height: 4),
+                          _roleTag(user.role.label, _roleColor(user.role)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppPalette.danger.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppPalette.danger.withOpacity(0.20)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline_rounded, color: AppPalette.danger, size: 16),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'This action will delete the user profile, all their bookings, and notifications. This cannot be undone.',
+                        style: _body(size: 11, color: AppPalette.danger, height: 1.4),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          _outlineButton('Cancel', () => Navigator.pop(context, false)),
+          InkWell(
+            onTap: () => Navigator.pop(context, true),
+            borderRadius: BorderRadius.circular(10),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
+              decoration: BoxDecoration(
+                color: AppPalette.danger,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                'Delete',
+                style: _body(size: 13, color: Colors.white, weight: FontWeight.w800),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      _runAction(
+        () => _repo.deleteUser(user.id),
+        '✅ User "${user.fullName}" deleted successfully',
+      );
+    }
   }
 
   Widget _roomGrid(List<RoomInfo> rooms, {bool adminMode = false}) =>
@@ -6641,54 +7181,139 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       7,
       (i) => DateTime.now().subtract(Duration(days: 6 - i)),
     );
-    final data = {
-      for (final d in days)
-        _weekday(d): _bookings
-            .where((b) => b.date == _isoDate(d))
-            .length
-            .toDouble(),
-    };
-    final maxVal = data.values.fold<double>(1, (a, b) => math.max(a, b));
+    final todayStr = _isoDate(DateTime.now());
+    final data = LinkedHashMap<String, (double, bool)>.fromEntries(
+      days.map((d) {
+        final count = _bookings.where((b) => b.date == _isoDate(d)).length.toDouble();
+        final isToday = _isoDate(d) == todayStr;
+        return MapEntry(_weekday(d), (count, isToday));
+      }),
+    );
+    final maxVal = data.values.map((v) => v.$1).fold<double>(1, math.max);
+    final totalWeek = data.values.fold<int>(0, (s, v) => s + v.$1.toInt());
+
     return _SurfaceCard(
       padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _heading('📈 Bookings This Week', size: 14),
-          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(7),
+                    decoration: BoxDecoration(
+                      color: AppPalette.accent.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.bar_chart_rounded, color: AppPalette.accent, size: 16),
+                  ),
+                  const SizedBox(width: 10),
+                  _heading('Bookings This Week', size: 14),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppPalette.accent.withOpacity(0.10),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: AppPalette.accent.withOpacity(0.20)),
+                ),
+                child: Text(
+                  '$totalWeek total',
+                  style: _body(size: 11, color: AppPalette.accent, weight: FontWeight.w700),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
           SizedBox(
-            height: 110,
+            height: 130,
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
-              children: data.entries
-                  .map(
-                    (entry) => Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            AnimatedContainer(
-                              duration: const Duration(milliseconds: 600),
-                              height: 18 + (entry.value / maxVal) * 74,
-                              decoration: BoxDecoration(
-                                gradient: AppPalette.mainGradient,
-                                borderRadius: const BorderRadius.vertical(
-                                  top: Radius.circular(5),
-                                ),
-                              ),
+              children: data.entries.map((entry) {
+                final count = entry.value.$1;
+                final isToday = entry.value.$2;
+                final barHeight = 20 + (count / maxVal) * 82;
+                return Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        // Value label
+                        if (count > 0)
+                          Text(
+                            count.toInt().toString(),
+                            style: _body(
+                              size: 10,
+                              color: isToday ? AppPalette.accent : AppPalette.text2,
+                              weight: isToday ? FontWeight.w800 : FontWeight.w600,
                             ),
-                            const SizedBox(height: 4),
-                            Text(
-                              entry.key,
-                              style: _body(size: 9, color: AppPalette.text3),
-                            ),
-                          ],
+                          )
+                        else
+                          const SizedBox(height: 14),
+                        const SizedBox(height: 4),
+                        // Bar
+                        AnimatedContainer(
+                          duration: const Duration(milliseconds: 700),
+                          curve: Curves.easeOutCubic,
+                          height: barHeight,
+                          decoration: BoxDecoration(
+                            gradient: isToday
+                                ? const LinearGradient(
+                                    colors: [AppPalette.accent, AppPalette.accent2],
+                                    begin: Alignment.bottomCenter,
+                                    end: Alignment.topCenter,
+                                  )
+                                : LinearGradient(
+                                    colors: [
+                                      AppPalette.accent.withOpacity(0.30),
+                                      AppPalette.accent2.withOpacity(0.55),
+                                    ],
+                                    begin: Alignment.bottomCenter,
+                                    end: Alignment.topCenter,
+                                  ),
+                            borderRadius: const BorderRadius.vertical(top: Radius.circular(6)),
+                            boxShadow: isToday
+                                ? [
+                                    BoxShadow(
+                                      color: AppPalette.accent.withOpacity(0.35),
+                                      blurRadius: 10,
+                                      offset: const Offset(0, -3),
+                                    ),
+                                  ]
+                                : [],
+                          ),
                         ),
-                      ),
+                        const SizedBox(height: 6),
+                        // Day label
+                        Text(
+                          entry.key,
+                          style: _body(
+                            size: 10,
+                            color: isToday ? AppPalette.accent : AppPalette.text3,
+                            weight: isToday ? FontWeight.w800 : FontWeight.w500,
+                          ),
+                        ),
+                        if (isToday)
+                          Container(
+                            width: 4, height: 4,
+                            margin: const EdgeInsets.only(top: 3),
+                            decoration: const BoxDecoration(
+                              color: AppPalette.accent,
+                              shape: BoxShape.circle,
+                            ),
+                          )
+                        else
+                          const SizedBox(height: 7),
+                      ],
                     ),
-                  )
-                  .toList(),
+                  ),
+                );
+              }).toList(),
             ),
           ),
         ],
@@ -6697,43 +7322,77 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   }
 
   Widget _donutChart() {
-    final total = _rooms.length == 0 ? 1 : _rooms.length;
+    final total = _rooms.isEmpty ? 1 : _rooms.length;
     final available = _rooms.where((r) => !r.isFull && !r.isPending).length;
     final booked = total - available;
     final pct = ((booked / total) * 100).round();
+    final availPct = 100 - pct;
+
     return _SurfaceCard(
       padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _heading('🍩 Room Usage', size: 14),
-          const SizedBox(height: 16),
           Row(
             children: [
+              Container(
+                padding: const EdgeInsets.all(7),
+                decoration: BoxDecoration(
+                  color: AppPalette.accent2.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.donut_large_rounded, color: AppPalette.accent2, size: 16),
+              ),
+              const SizedBox(width: 10),
+              _heading('Room Usage', size: 14),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // Donut ring
               SizedBox(
-                width: 92,
-                height: 92,
+                width: 100,
+                height: 100,
                 child: Stack(
                   alignment: Alignment.center,
                   children: [
-                    CircularProgressIndicator(
-                      value: booked / total,
-                      strokeWidth: 12,
-                      color: AppPalette.accent,
-                      backgroundColor: AppPalette.surface2,
+                    // Background track
+                    SizedBox(
+                      width: 100, height: 100,
+                      child: CircularProgressIndicator(
+                        value: 1,
+                        strokeWidth: 14,
+                        color: AppPalette.surface2,
+                      ),
                     ),
+                    // Foreground progress
+                    SizedBox(
+                      width: 100, height: 100,
+                      child: CircularProgressIndicator(
+                        value: booked / total,
+                        strokeWidth: 14,
+                        backgroundColor: Colors.transparent,
+                        valueColor: const AlwaysStoppedAnimation<Color>(AppPalette.accent),
+                      ),
+                    ),
+                    // Center label
                     Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
                           '$pct%',
                           style: GoogleFonts.plusJakartaSans(
-                            fontSize: 18,
+                            fontSize: 20,
                             fontWeight: FontWeight.w800,
+                            color: AppPalette.text,
+                            height: 1,
                           ),
                         ),
+                        const SizedBox(height: 2),
                         Text(
-                          'Used',
+                          'occupied',
                           style: _body(size: 9, color: AppPalette.text2),
                         ),
                       ],
@@ -6741,13 +7400,43 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   ],
                 ),
               ),
-              const SizedBox(width: 20),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _legend(AppPalette.accent, 'Booked/Unavailable ($booked)'),
-                  _legend(AppPalette.accent3, 'Available ($available)'),
-                ],
+              const SizedBox(width: 18),
+              // Legend
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _legendDetailed(
+                      AppPalette.accent,
+                      'Occupied',
+                      '$booked rooms',
+                      '$pct%',
+                    ),
+                    const SizedBox(height: 12),
+                    _legendDetailed(
+                      AppPalette.accent3,
+                      'Available',
+                      '$available rooms',
+                      '$availPct%',
+                    ),
+                    const SizedBox(height: 12),
+                    Container(
+                      height: 1,
+                      color: AppPalette.border,
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('Total', style: _body(size: 11, color: AppPalette.text2)),
+                        Text(
+                          '$total rooms',
+                          style: _body(size: 11, color: AppPalette.text, weight: FontWeight.w700),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
@@ -6755,6 +7444,36 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       ),
     );
   }
+
+  Widget _legendDetailed(Color color, String label, String count, String pct) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Container(
+        width: 10, height: 10,
+        margin: const EdgeInsets.only(top: 2),
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(3),
+        ),
+      ),
+      const SizedBox(width: 8),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: _body(size: 12, color: AppPalette.text, weight: FontWeight.w600)),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(count, style: _body(size: 10, color: AppPalette.text2)),
+                Text(pct, style: _body(size: 10, color: color, weight: FontWeight.w700)),
+              ],
+            ),
+          ],
+        ),
+      ),
+    ],
+  );
 
   Widget _legend(Color color, String label) => Padding(
     padding: const EdgeInsets.only(bottom: 8),

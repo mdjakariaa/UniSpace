@@ -1835,6 +1835,9 @@ class UniSpaceRepository {
   }
 
   Future<void> deleteRoom(String roomId) async {
+    // Delete related records first to avoid FK constraint errors
+    await client.from('bookings').delete().eq('room_id', roomId);
+    await client.from('slot_availability').delete().eq('room_id', roomId);
     await client.from('rooms').delete().eq('id', roomId);
   }
 
@@ -4169,24 +4172,274 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
 
   Widget _adminMonitor() {
     final bookings = _filteredAdminTeacherBookings();
+    final now = DateTime.now();
+
+    // Compute counts for summary bar
+    int confirmedCount = 0, activeCount = 0, completedCount = 0, cancelledCount = 0;
+    for (final b in bookings) {
+      final s = _bookingCurrentStatus(b);
+      if (s == 'confirmed') confirmedCount++;
+      else if (s == 'active') activeCount++;
+      else if (s == 'completed') completedCount++;
+      else if (s == 'cancelled') cancelledCount++;
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _pageHeader(
-          'Booking Monitor',
-          'Monitor teacher room bookings, conflicts, date filters, and slot availability',
+        // ── Modern Header ─────────────────────────────────────────────
+        Container(
+          margin: const EdgeInsets.only(bottom: 20),
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [AppPalette.accent.withOpacity(0.15), AppPalette.accent2.withOpacity(0.10)],
+              begin: Alignment.topLeft, end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: AppPalette.accent.withOpacity(0.20)),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(colors: [AppPalette.accent, AppPalette.accent2], begin: Alignment.topLeft, end: Alignment.bottomRight),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(Icons.monitor_heart_rounded, color: Colors.white, size: 22),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Booking Monitor', style: _body(size: 20, weight: FontWeight.w800)),
+                    const SizedBox(height: 4),
+                    Text('Monitor teacher room bookings, conflicts, date filters, and slot availability',
+                      style: _body(size: 12, color: AppPalette.text2, height: 1.4)),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: AppPalette.accent.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: AppPalette.accent.withOpacity(0.30)),
+                ),
+                child: Text('${bookings.length} booking${bookings.length == 1 ? '' : 's'}',
+                  style: _body(size: 12, color: AppPalette.accent, weight: FontWeight.w700)),
+              ),
+            ],
+          ),
         ),
+
+        // ── Summary Chips ─────────────────────────────────────────────
+        if (bookings.isNotEmpty) ...[
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _monitorChip('Confirmed', confirmedCount, AppPalette.accent),
+                const SizedBox(width: 8),
+                _monitorChip('Active', activeCount, AppPalette.accent3),
+                const SizedBox(width: 8),
+                _monitorChip('Completed', completedCount, AppPalette.text2),
+                const SizedBox(width: 8),
+                _monitorChip('Cancelled', cancelledCount, AppPalette.danger),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
+
+        // ── Filters ───────────────────────────────────────────────────
         _adminBookingFilters(),
         const SizedBox(height: 16),
+
+        // ── Booking Cards ─────────────────────────────────────────────
         bookings.isEmpty
-            ? _emptyState(
-                'No teacher room bookings found',
-                'Assign a teacher from Room Management or clear filters.',
-              )
-            : _bookingTable(bookings, adminActions: true),
+            ? _emptyState('No teacher room bookings found', 'Assign a teacher from Room Management or clear filters.')
+            : _adminBookingCards(bookings),
       ],
     );
   }
+
+  Widget _monitorChip(String label, int count, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.10),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(0.25)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(width: 7, height: 7, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+          const SizedBox(width: 7),
+          Text('$count $label', style: _body(size: 12, color: color, weight: FontWeight.w700)),
+        ],
+      ),
+    );
+  }
+
+  Widget _adminBookingCards(List<BookingInfo> bookings) {
+    return Column(
+      children: bookings.asMap().entries.map((e) {
+        final b = e.value;
+        final statusText = _bookingCurrentStatus(b);
+        final isUpcoming = _bookingIsUpcoming(b);
+        final isActive = statusText == 'active';
+
+        final statusColor = statusText == 'cancelled'
+            ? AppPalette.danger
+            : statusText == 'completed'
+                ? AppPalette.text2
+                : statusText == 'active'
+                    ? AppPalette.accent3
+                    : AppPalette.accent; // confirmed
+
+        final statusIcon = statusText == 'cancelled'
+            ? '✕'
+            : statusText == 'completed'
+                ? '●'
+                : statusText == 'active'
+                    ? '▶'
+                    : '●';
+
+        final canCancel = isUpcoming || isActive;
+
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Container(
+            decoration: BoxDecoration(
+              color: AppPalette.surface,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: isActive
+                    ? AppPalette.accent3.withOpacity(0.30)
+                    : statusText == 'cancelled'
+                        ? AppPalette.danger.withOpacity(0.15)
+                        : AppPalette.border,
+                width: isActive ? 1.5 : 1,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: isActive ? AppPalette.accent3.withOpacity(0.06) : Colors.black.withOpacity(0.08),
+                  blurRadius: 12, offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      // Avatar
+                      _avatar(_initials(b.userName), size: 40, radius: 11),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(b.userName, style: _body(size: 14, weight: FontWeight.w700), overflow: TextOverflow.ellipsis),
+                            const SizedBox(height: 2),
+                            Text(b.roomName, style: _body(size: 12, color: AppPalette.accent), overflow: TextOverflow.ellipsis),
+                          ],
+                        ),
+                      ),
+                      // Status badge
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: statusColor.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: statusColor.withOpacity(0.30)),
+                        ),
+                        child: Text(
+                          '$statusIcon ${_statusLabel(statusText)}',
+                          style: _body(size: 11, color: statusColor, weight: FontWeight.w700),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  // Details row
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: AppPalette.surface2,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      children: [
+                        _bookingDetailItem(Icons.meeting_room_outlined, b.roomLocation),
+                        _bookingDetailDivider(),
+                        _bookingDetailItem(Icons.calendar_today_outlined, b.displayDate),
+                        _bookingDetailDivider(),
+                        _bookingDetailItem(Icons.schedule_outlined, b.timeRange),
+                      ],
+                    ),
+                  ),
+                  // Cancel action
+                  if (canCancel) ...[
+                    const SizedBox(height: 10),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: InkWell(
+                        onTap: () => _runAction(
+                          () => _repo.cancelBooking(b.id),
+                          '✅ Booking cancelled by Admin',
+                        ),
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                          decoration: BoxDecoration(
+                            color: AppPalette.danger.withOpacity(0.10),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: AppPalette.danger.withOpacity(0.30)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.cancel_outlined, color: AppPalette.danger, size: 15),
+                              const SizedBox(width: 6),
+                              Text('Cancel Booking', style: _body(size: 12, color: AppPalette.danger, weight: FontWeight.w700)),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _bookingDetailItem(IconData icon, String text) => Expanded(
+    child: Row(
+      children: [
+        Icon(icon, size: 13, color: AppPalette.text2),
+        const SizedBox(width: 5),
+        Expanded(child: Text(text, style: _body(size: 11, color: AppPalette.text2), overflow: TextOverflow.ellipsis)),
+      ],
+    ),
+  );
+
+  Widget _bookingDetailDivider() => Container(
+    width: 1, height: 16, margin: const EdgeInsets.symmetric(horizontal: 8),
+    color: AppPalette.border,
+  );
+
 
   Widget _bookingTable(
     List<BookingInfo> bookings, {
@@ -4289,114 +4542,191 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   }
 
   Widget _adminBookingFilters() {
-    return _SurfaceCard(
-      padding: const EdgeInsets.all(16),
-      child: Wrap(
-        spacing: 12,
-        runSpacing: 12,
-        crossAxisAlignment: WrapCrossAlignment.center,
+    final hasFilters = _adminTeacherFilter != 'all' || _adminRoomFilter != 'all'
+        || _adminSlotFilter != 'all' || _adminDateFilter != null;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: AppPalette.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppPalette.border),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 12, offset: const Offset(0, 4))],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(
-            width: 240,
-            child: DropdownButtonFormField<String>(
-              value: _adminTeacherFilter,
-              dropdownColor: AppPalette.surface2,
-              decoration: _inputDecoration('Filter by teacher'),
-              items: [
-                const DropdownMenuItem(
-                  value: 'all',
-                  child: Text('All Teachers'),
-                ),
-                ..._teachers.map(
-                  (t) => DropdownMenuItem(
-                    value: t.id,
-                    child: Text(
-                      '${t.fullName} • ${t.email}',
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ),
-              ],
-              onChanged: (v) =>
-                  setState(() => _adminTeacherFilter = v ?? 'all'),
+          // Header strip
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: AppPalette.surface2,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+              border: Border(bottom: BorderSide(color: AppPalette.border)),
             ),
-          ),
-          SizedBox(
-            width: 220,
-            child: DropdownButtonFormField<String>(
-              value: _adminRoomFilter,
-              dropdownColor: AppPalette.surface2,
-              decoration: _inputDecoration('Filter by room'),
-              items: [
-                const DropdownMenuItem(value: 'all', child: Text('All Rooms')),
-                ..._rooms.map(
-                  (r) => DropdownMenuItem(
-                    value: r.id,
-                    child: Text(r.name, overflow: TextOverflow.ellipsis),
-                  ),
-                ),
-              ],
-              onChanged: (v) => setState(() => _adminRoomFilter = v ?? 'all'),
-            ),
-          ),
-          SizedBox(
-            width: 190,
-            child: _outlineButton(
-              _adminDateFilter == null
-                  ? '📅 All Dates'
-                  : '📅 ${_isoDate(_adminDateFilter!)}',
-              () async {
-                final picked = await showDatePicker(
-                  context: context,
-                  initialDate: _adminDateFilter ?? DateTime.now(),
-                  firstDate: DateTime.now().subtract(const Duration(days: 180)),
-                  lastDate: DateTime.now().add(const Duration(days: 365)),
-                  builder: (context, child) => Theme(
-                    data: ThemeData.dark().copyWith(
-                      colorScheme: const ColorScheme.dark(
-                        primary: AppPalette.accent,
-                        surface: AppPalette.surface,
+            child: Row(
+              children: [
+                Icon(Icons.filter_list_rounded, size: 16, color: AppPalette.accent),
+                const SizedBox(width: 8),
+                Text('Filters', style: _body(size: 13, weight: FontWeight.w700, color: AppPalette.text)),
+                const Spacer(),
+                if (hasFilters)
+                  InkWell(
+                    onTap: () => setState(() {
+                      _adminTeacherFilter = 'all';
+                      _adminRoomFilter = 'all';
+                      _adminSlotFilter = 'all';
+                      _adminDateFilter = null;
+                    }),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: AppPalette.warn.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: AppPalette.warn.withOpacity(0.30)),
                       ),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.close_rounded, size: 13, color: AppPalette.warn),
+                        const SizedBox(width: 4),
+                        Text('Clear', style: _body(size: 11, color: AppPalette.warn, weight: FontWeight.w700)),
+                      ]),
                     ),
-                    child: child!,
                   ),
-                );
-                if (picked != null) setState(() => _adminDateFilter = picked);
-              },
+              ],
             ),
           ),
-          SizedBox(
-            width: 230,
-            child: DropdownButtonFormField<String>(
-              value: _adminSlotFilter,
-              dropdownColor: AppPalette.surface2,
-              decoration: _inputDecoration('Filter by time slot'),
-              items: [
-                const DropdownMenuItem(value: 'all', child: Text('All Slots')),
-                ...fixedTeacherSlots.entries.map(
-                  (e) => DropdownMenuItem(
-                    value: e.key,
-                    child: Text(e.value, overflow: TextOverflow.ellipsis),
+          // Filter controls
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                // Teacher filter
+                _filterField(
+                  label: '👨‍🏫 Teacher',
+                  child: DropdownButtonFormField<String>(
+                    value: _adminTeacherFilter,
+                    dropdownColor: AppPalette.surface2,
+                    decoration: _inputDecoration('All Teachers'),
+                    isExpanded: true,
+                    items: [
+                      const DropdownMenuItem(value: 'all', child: Text('All Teachers')),
+                      ..._teachers.map((t) => DropdownMenuItem(
+                        value: t.id,
+                        child: Text('${t.fullName} • ${t.email}', overflow: TextOverflow.ellipsis),
+                      )),
+                    ],
+                    onChanged: (v) => setState(() => _adminTeacherFilter = v ?? 'all'),
                   ),
+                  width: 240,
+                ),
+                // Room filter
+                _filterField(
+                  label: '🏫 Room',
+                  child: DropdownButtonFormField<String>(
+                    value: _adminRoomFilter,
+                    dropdownColor: AppPalette.surface2,
+                    decoration: _inputDecoration('All Rooms'),
+                    isExpanded: true,
+                    items: [
+                      const DropdownMenuItem(value: 'all', child: Text('All Rooms')),
+                      ..._rooms.map((r) => DropdownMenuItem(
+                        value: r.id,
+                        child: Text(r.name, overflow: TextOverflow.ellipsis),
+                      )),
+                    ],
+                    onChanged: (v) => setState(() => _adminRoomFilter = v ?? 'all'),
+                  ),
+                  width: 200,
+                ),
+                // Date filter
+                _filterField(
+                  label: '📅 Date',
+                  child: InkWell(
+                    onTap: () async {
+                      final picked = await showDatePicker(
+                        context: context,
+                        initialDate: _adminDateFilter ?? DateTime.now(),
+                        firstDate: DateTime.now().subtract(const Duration(days: 180)),
+                        lastDate: DateTime.now().add(const Duration(days: 365)),
+                        builder: (context, child) => Theme(
+                          data: ThemeData.dark().copyWith(colorScheme: const ColorScheme.dark(primary: AppPalette.accent, surface: AppPalette.surface)),
+                          child: child!,
+                        ),
+                      );
+                      if (picked != null) setState(() => _adminDateFilter = picked);
+                    },
+                    child: Container(
+                      height: 50,
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      decoration: BoxDecoration(
+                        color: _adminDateFilter != null ? AppPalette.accent.withOpacity(0.10) : AppPalette.surface2,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: _adminDateFilter != null ? AppPalette.accent.withOpacity(0.40) : AppPalette.border),
+                      ),
+                      child: Row(children: [
+                        Icon(Icons.calendar_today_rounded, size: 15, color: _adminDateFilter != null ? AppPalette.accent : AppPalette.text2),
+                        const SizedBox(width: 8),
+                        Text(
+                          _adminDateFilter == null ? 'All Dates' : _isoDate(_adminDateFilter!),
+                          style: _body(size: 13, color: _adminDateFilter != null ? AppPalette.accent : AppPalette.text2, weight: FontWeight.w600),
+                        ),
+                        if (_adminDateFilter != null) ...[
+                          const Spacer(),
+                          GestureDetector(
+                            onTap: () => setState(() => _adminDateFilter = null),
+                            child: Icon(Icons.close_rounded, size: 15, color: AppPalette.text2),
+                          ),
+                        ],
+                      ]),
+                    ),
+                  ),
+                  width: 180,
+                ),
+                // Slot filter
+                _filterField(
+                  label: '🕐 Time Slot',
+                  child: DropdownButtonFormField<String>(
+                    value: _adminSlotFilter,
+                    dropdownColor: AppPalette.surface2,
+                    decoration: _inputDecoration('All Slots'),
+                    isExpanded: true,
+                    items: [
+                      const DropdownMenuItem(value: 'all', child: Text('All Slots')),
+                      ...fixedTeacherSlots.entries.map((e) => DropdownMenuItem(
+                        value: e.key,
+                        child: Text(e.value, overflow: TextOverflow.ellipsis),
+                      )),
+                    ],
+                    onChanged: (v) => setState(() => _adminSlotFilter = v ?? 'all'),
+                  ),
+                  width: 220,
                 ),
               ],
-              onChanged: (v) => setState(() => _adminSlotFilter = v ?? 'all'),
             ),
-          ),
-          _actionButton(
-            'Clear Filters',
-            AppPalette.warn,
-            () => setState(() {
-              _adminTeacherFilter = 'all';
-              _adminRoomFilter = 'all';
-              _adminSlotFilter = 'all';
-              _adminDateFilter = null;
-            }),
           ),
         ],
       ),
     );
   }
+
+  Widget _filterField({required String label, required Widget child, required double width}) {
+    return SizedBox(
+      width: width,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 2, bottom: 5),
+            child: Text(label, style: _body(size: 11, color: AppPalette.text2, weight: FontWeight.w600)),
+          ),
+          child,
+        ],
+      ),
+    );
+  }
+
 
   Widget _userTable() {
     return _tableCard(
@@ -4413,14 +4743,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             isActive ? '● Active' : '◌ Inactive',
             isActive ? AppPalette.accent3 : AppPalette.warn,
           ),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: [
-              _actionButton('Edit', AppPalette.accent, () => _showUserDialog(u)),
-              _actionButton('Delete', AppPalette.danger, () => _confirmDeleteUser(u)),
-            ],
-          ),
+          _actionButton('Edit', AppPalette.accent, () => _showUserDialog(u)),
         ];
       }).toList(),
     );
@@ -6029,7 +6352,6 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   }
 
   Future<void> _showUserDialog(UserProfile user) async {
-    UniRole role = user.role;
     String status = user.status;
     await showDialog<void>(
       context: context,
@@ -6056,18 +6378,6 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   style: _body(size: 12, color: AppPalette.text2),
                 ),
                 const SizedBox(height: 16),
-                DropdownButtonFormField<UniRole>(
-                  value: role,
-                  dropdownColor: AppPalette.surface2,
-                  decoration: _inputDecoration('Role'),
-                  items: UniRole.values
-                      .map(
-                        (r) => DropdownMenuItem(value: r, child: Text(r.label)),
-                      )
-                      .toList(),
-                  onChanged: (v) => setModalState(() => role = v ?? role),
-                ),
-                const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
                   value: status,
                   dropdownColor: AppPalette.surface2,
@@ -6118,7 +6428,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             _gradientButton('Save', () {
               Navigator.pop(context);
               _runAction(
-                () => _repo.updateUserRoleStatus(user.id, role, status),
+                () => _repo.updateUserRoleStatus(user.id, user.role, status),
                 '✅ User updated!',
               );
             }),
@@ -6245,8 +6555,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
 
   Widget _roomGrid(List<RoomInfo> rooms, {bool adminMode = false}) =>
       _responsiveGrid(
-        minTileWidth: 310,
-        aspectRatio: adminMode ? 1.12 : 0.92,
+        minTileWidth: adminMode ? 160 : 280,
+        aspectRatio: adminMode ? 1.35 : 0.92,
         children: rooms
             .map((room) => _roomCard(room, adminMode: adminMode))
             .toList(),
@@ -6383,10 +6693,42 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                       _actionButton(
                         '🗑️ Delete',
                         AppPalette.danger,
-                        () => _runAction(
-                          () => _repo.deleteRoom(room.id),
-                          '🗑️ Room deleted!',
-                        ),
+                        () async {
+                          final ok = await showDialog<bool>(
+                            context: context,
+                            builder: (ctx) => AlertDialog(
+                              backgroundColor: AppPalette.surface,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: AppPalette.border)),
+                              title: Row(children: [
+                                Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: AppPalette.danger.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
+                                  child: Icon(Icons.warning_amber_rounded, color: AppPalette.danger, size: 20)),
+                                const SizedBox(width: 10),
+                                Text('Delete Room', style: _body(size: 16, weight: FontWeight.w800)),
+                              ]),
+                              content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                Text('Delete "${room.name}"?', style: _body(size: 14, weight: FontWeight.w700)),
+                                const SizedBox(height: 8),
+                                Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: AppPalette.danger.withOpacity(0.08), borderRadius: BorderRadius.circular(10), border: Border.all(color: AppPalette.danger.withOpacity(0.20))),
+                                  child: Row(children: [
+                                    Icon(Icons.info_outline_rounded, color: AppPalette.danger, size: 15),
+                                    const SizedBox(width: 8),
+                                    Expanded(child: Text('This will permanently delete the room and all its bookings. This cannot be undone.', style: _body(size: 11, color: AppPalette.danger, height: 1.4))),
+                                  ])),
+                              ]),
+                              actions: [
+                                _outlineButton('Cancel', () => Navigator.pop(ctx, false)),
+                                InkWell(
+                                  onTap: () => Navigator.pop(ctx, true),
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: Container(padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
+                                    decoration: BoxDecoration(color: AppPalette.danger, borderRadius: BorderRadius.circular(10)),
+                                    child: Text('Delete', style: _body(size: 13, color: Colors.white, weight: FontWeight.w800))),
+                                ),
+                              ],
+                            ),
+                          );
+                          if (ok == true) _runAction(() => _repo.deleteRoom(room.id), '🗑️ Room deleted!');
+                        },
                       ),
                     ],
                   ),

@@ -1835,9 +1835,36 @@ class UniSpaceRepository {
   }
 
   Future<void> deleteRoom(String roomId) async {
-    // Delete related records first to avoid FK constraint errors
-    await client.from('bookings').delete().eq('room_id', roomId);
-    await client.from('slot_availability').delete().eq('room_id', roomId);
+    // Step 1: Delete room_requests (references both rooms AND bookings — no CASCADE)
+    try {
+      await client.from('room_requests').delete().eq('room_id', roomId);
+    } catch (_) {}
+
+    // Step 2: Delete bookings (has CASCADE but also have booking_slips as children)
+    // First delete booking_slips that reference these bookings
+    try {
+      final bookingIds = await client
+          .from('bookings')
+          .select('id')
+          .eq('room_id', roomId);
+      for (final b in bookingIds) {
+        try {
+          await client.from('booking_slips').delete().eq('booking_id', b['id']);
+        } catch (_) {}
+      }
+    } catch (_) {}
+    try {
+      await client.from('bookings').delete().eq('room_id', roomId);
+    } catch (_) {}
+
+    // Step 3: Nullify study_groups.room_id (no CASCADE — set to null to unlink)
+    try {
+      await client
+          .from('study_groups')
+          .update({'room_id': null}).eq('room_id', roomId);
+    } catch (_) {}
+
+    // Step 4: Delete the room (room_ratings CASCADE auto-deletes)
     await client.from('rooms').delete().eq('id', roomId);
   }
 
@@ -6553,15 +6580,304 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     }
   }
 
-  Widget _roomGrid(List<RoomInfo> rooms, {bool adminMode = false}) =>
-      _responsiveGrid(
-        minTileWidth: adminMode ? 160 : 280,
-        aspectRatio: adminMode ? 1.35 : 0.92,
-        children: rooms
-            .map((room) => _roomCard(room, adminMode: adminMode))
-            .toList(),
+  Widget _roomGrid(List<RoomInfo> rooms, {bool adminMode = false}) {
+    if (!adminMode) {
+      return _responsiveGrid(
+        minTileWidth: 280,
+        aspectRatio: 0.92,
+        children: rooms.map((room) => _roomCard(room, adminMode: false)).toList(),
         bottom: 28,
       );
+    }
+    // Admin mode: use a LayoutBuilder-driven 2-col grid on mobile, list on desktop
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isMobile = constraints.maxWidth < 600;
+        if (!isMobile) {
+          // Desktop: clean vertical list of horizontal cards
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 28),
+            child: Column(
+              children: rooms.asMap().entries.map((e) {
+                return Padding(
+                  padding: EdgeInsets.only(bottom: e.key < rooms.length - 1 ? 12 : 0),
+                  child: _adminRoomListCard(e.value),
+                );
+              }).toList(),
+            ),
+          );
+        }
+        // Mobile: 2-column grid of compact cards
+        final colWidth = (constraints.maxWidth - 12) / 2;
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 28),
+          child: Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: rooms.map((room) => SizedBox(
+              width: colWidth,
+              child: _adminRoomCompactCard(room),
+            )).toList(),
+          ),
+        );
+      },
+    );
+  }
+
+  // Desktop admin card — horizontal list item style
+  Widget _adminRoomListCard(RoomInfo room) {
+    const statusColor = AppPalette.accent3;
+    return Container(
+      decoration: BoxDecoration(
+        color: AppPalette.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppPalette.border),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.07), blurRadius: 10, offset: const Offset(0, 3))],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        child: Row(
+          children: [
+            // Room icon
+            Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(colors: room.colors, begin: Alignment.topLeft, end: Alignment.bottomRight),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Center(child: Text(room.icon, style: const TextStyle(fontSize: 26))),
+            ),
+            const SizedBox(width: 16),
+            // Room info
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(room.name, style: _body(size: 15, weight: FontWeight.w800), overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Icon(Icons.location_on_outlined, size: 13, color: AppPalette.text2),
+                      const SizedBox(width: 3),
+                      Expanded(child: Text(room.location, style: _body(size: 12, color: AppPalette.text2), overflow: TextOverflow.ellipsis)),
+                    ],
+                  ),
+                  const SizedBox(height: 3),
+                  Row(
+                    children: [
+                      Icon(Icons.event_seat_rounded, size: 13, color: AppPalette.text2),
+                      const SizedBox(width: 3),
+                      Text('Capacity: ${room.capacity}', style: _body(size: 12, color: AppPalette.text2)),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            // Status chip
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: statusColor.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: statusColor.withOpacity(0.30)),
+              ),
+              child: Text('● Slot Based', style: _body(size: 11, color: statusColor, weight: FontWeight.w700)),
+            ),
+            const SizedBox(width: 12),
+            // Action buttons
+            InkWell(
+              onTap: () => _showRoomDialog(room: room),
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                decoration: BoxDecoration(
+                  color: AppPalette.accent.withOpacity(0.10),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppPalette.accent.withOpacity(0.30)),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.edit_rounded, size: 14, color: AppPalette.accent),
+                  const SizedBox(width: 6),
+                  Text('Edit', style: _body(size: 12, color: AppPalette.accent, weight: FontWeight.w700)),
+                ]),
+              ),
+            ),
+            const SizedBox(width: 8),
+            InkWell(
+              onTap: () => _confirmAndDeleteRoom(room),
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                decoration: BoxDecoration(
+                  color: AppPalette.danger.withOpacity(0.10),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppPalette.danger.withOpacity(0.30)),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.delete_outline_rounded, size: 14, color: AppPalette.danger),
+                  const SizedBox(width: 6),
+                  Text('Delete', style: _body(size: 12, color: AppPalette.danger, weight: FontWeight.w700)),
+                ]),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Mobile admin card — compact 2-column card
+  Widget _adminRoomCompactCard(RoomInfo room) {
+    const statusColor = AppPalette.accent3;
+    return Container(
+      decoration: BoxDecoration(
+        color: AppPalette.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppPalette.border),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.07), blurRadius: 10, offset: const Offset(0, 3))],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Coloured header strip
+          Container(
+            height: 72,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(colors: room.colors, begin: Alignment.topLeft, end: Alignment.bottomRight),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+            ),
+            child: Stack(
+              children: [
+                Center(child: Text(room.icon, style: const TextStyle(fontSize: 28))),
+                Positioned(
+                  top: 8, right: 8,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                    decoration: BoxDecoration(color: Colors.black.withOpacity(0.30), borderRadius: BorderRadius.circular(20)),
+                    child: Text('● Slot', style: _body(size: 9, color: statusColor, weight: FontWeight.w700)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Info section
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(room.name, style: _body(size: 13, weight: FontWeight.w800), overflow: TextOverflow.ellipsis, maxLines: 1),
+                const SizedBox(height: 3),
+                Text(room.location, style: _body(size: 11, color: AppPalette.text2), overflow: TextOverflow.ellipsis, maxLines: 1),
+                const SizedBox(height: 2),
+                Row(children: [
+                  Icon(Icons.event_seat_rounded, size: 11, color: AppPalette.text2),
+                  const SizedBox(width: 3),
+                  Text('${room.capacity} seats', style: _body(size: 11, color: AppPalette.text2)),
+                ]),
+                const SizedBox(height: 10),
+                // Buttons stacked vertically for narrow columns
+                SizedBox(
+                  width: double.infinity,
+                  child: InkWell(
+                    onTap: () => _showRoomDialog(room: room),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      decoration: BoxDecoration(
+                        color: AppPalette.accent.withOpacity(0.10),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: AppPalette.accent.withOpacity(0.30)),
+                      ),
+                      child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                        Icon(Icons.edit_rounded, size: 13, color: AppPalette.accent),
+                        const SizedBox(width: 5),
+                        Text('Edit', style: _body(size: 12, color: AppPalette.accent, weight: FontWeight.w700)),
+                      ]),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                SizedBox(
+                  width: double.infinity,
+                  child: InkWell(
+                    onTap: () => _confirmAndDeleteRoom(room),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      decoration: BoxDecoration(
+                        color: AppPalette.danger.withOpacity(0.10),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: AppPalette.danger.withOpacity(0.30)),
+                      ),
+                      child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                        Icon(Icons.delete_outline_rounded, size: 13, color: AppPalette.danger),
+                        const SizedBox(width: 5),
+                        Text('Delete', style: _body(size: 12, color: AppPalette.danger, weight: FontWeight.w700)),
+                      ]),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Extracted confirmation dialog for room deletion (used by both card types)
+  Future<void> _confirmAndDeleteRoom(RoomInfo room) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppPalette.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: AppPalette.border)),
+        title: Row(children: [
+          Container(padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(color: AppPalette.danger.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
+            child: Icon(Icons.warning_amber_rounded, color: AppPalette.danger, size: 20)),
+          const SizedBox(width: 10),
+          Expanded(child: Text('Delete Room', style: _body(size: 16, weight: FontWeight.w800))),
+        ]),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Delete "${room.name}"?', style: _body(size: 14, weight: FontWeight.w700)),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppPalette.danger.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: AppPalette.danger.withOpacity(0.20)),
+            ),
+            child: Row(children: [
+              Icon(Icons.info_outline_rounded, color: AppPalette.danger, size: 15),
+              const SizedBox(width: 8),
+              Expanded(child: Text(
+                'This will permanently delete the room and all its bookings. This cannot be undone.',
+                style: _body(size: 11, color: AppPalette.danger, height: 1.4),
+              )),
+            ]),
+          ),
+        ]),
+        actions: [
+          _outlineButton('Cancel', () => Navigator.pop(ctx, false)),
+          InkWell(
+            onTap: () => Navigator.pop(ctx, true),
+            borderRadius: BorderRadius.circular(10),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
+              decoration: BoxDecoration(color: AppPalette.danger, borderRadius: BorderRadius.circular(10)),
+              child: Text('Delete', style: _body(size: 13, color: Colors.white, weight: FontWeight.w800)),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) _runAction(() => _repo.deleteRoom(room.id), '🗑️ Room deleted!');
+  }
 
   Widget _roomCard(RoomInfo room, {bool adminMode = false}) {
     const statusColor = AppPalette.accent3;
@@ -6693,42 +7009,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                       _actionButton(
                         '🗑️ Delete',
                         AppPalette.danger,
-                        () async {
-                          final ok = await showDialog<bool>(
-                            context: context,
-                            builder: (ctx) => AlertDialog(
-                              backgroundColor: AppPalette.surface,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: AppPalette.border)),
-                              title: Row(children: [
-                                Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: AppPalette.danger.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
-                                  child: Icon(Icons.warning_amber_rounded, color: AppPalette.danger, size: 20)),
-                                const SizedBox(width: 10),
-                                Text('Delete Room', style: _body(size: 16, weight: FontWeight.w800)),
-                              ]),
-                              content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                Text('Delete "${room.name}"?', style: _body(size: 14, weight: FontWeight.w700)),
-                                const SizedBox(height: 8),
-                                Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: AppPalette.danger.withOpacity(0.08), borderRadius: BorderRadius.circular(10), border: Border.all(color: AppPalette.danger.withOpacity(0.20))),
-                                  child: Row(children: [
-                                    Icon(Icons.info_outline_rounded, color: AppPalette.danger, size: 15),
-                                    const SizedBox(width: 8),
-                                    Expanded(child: Text('This will permanently delete the room and all its bookings. This cannot be undone.', style: _body(size: 11, color: AppPalette.danger, height: 1.4))),
-                                  ])),
-                              ]),
-                              actions: [
-                                _outlineButton('Cancel', () => Navigator.pop(ctx, false)),
-                                InkWell(
-                                  onTap: () => Navigator.pop(ctx, true),
-                                  borderRadius: BorderRadius.circular(10),
-                                  child: Container(padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
-                                    decoration: BoxDecoration(color: AppPalette.danger, borderRadius: BorderRadius.circular(10)),
-                                    child: Text('Delete', style: _body(size: 13, color: Colors.white, weight: FontWeight.w800))),
-                                ),
-                              ],
-                            ),
-                          );
-                          if (ok == true) _runAction(() => _repo.deleteRoom(room.id), '🗑️ Room deleted!');
-                        },
+                        () => _confirmAndDeleteRoom(room),
                       ),
                     ],
                   ),

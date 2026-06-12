@@ -121,8 +121,8 @@ CREATE TABLE IF NOT EXISTS public.notifications (
   title TEXT NOT NULL,
   body TEXT NOT NULL,
   type TEXT NOT NULL CHECK (type IN (
-    'booking_confirmed', 'booking_cancelled', 'group_invite',
-    'request_approved', 'request_rejected', 'reminder', 'system'
+    'booking_confirmed', 'booking_cancelled', 'teacher_room_assigned', 'teacher_cancellation_request',
+    'group_invite', 'group_join_request', 'request_approved', 'request_rejected', 'reminder', 'system'
   )),
   data JSONB DEFAULT '{}',
   is_read BOOLEAN DEFAULT FALSE,
@@ -604,10 +604,14 @@ UPDATE public.room_requests SET teacher_id = requested_by WHERE teacher_id IS NU
 ALTER TABLE public.room_requests DROP CONSTRAINT IF EXISTS room_requests_request_type_check;
 ALTER TABLE public.room_requests ADD CONSTRAINT room_requests_request_type_check CHECK (request_type IN ('cancel', 'release', 'cancellation'));
 
+DELETE FROM public.notifications WHERE type NOT IN (
+  'booking_confirmed', 'booking_cancelled', 'teacher_room_assigned', 'teacher_cancellation_request',
+  'group_invite', 'group_join_request', 'request_approved', 'request_rejected', 'reminder', 'system'
+);
 ALTER TABLE public.notifications DROP CONSTRAINT IF EXISTS notifications_type_check;
 ALTER TABLE public.notifications ADD CONSTRAINT notifications_type_check CHECK (type IN (
   'booking_confirmed', 'booking_cancelled', 'teacher_room_assigned', 'teacher_cancellation_request',
-  'group_invite', 'request_approved', 'request_rejected', 'reminder', 'system'
+  'group_invite', 'group_join_request', 'request_approved', 'request_rejected', 'reminder', 'system'
 ));
 
 DROP TRIGGER IF EXISTS bookings_updated_at ON public.bookings;
@@ -1514,10 +1518,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS group_join_requests_pending_unique_idx
   WHERE status = 'pending';
 
 -- Allow existing notification types plus system-based group admin messages.
+DELETE FROM public.notifications WHERE type NOT IN (
+  'booking_confirmed', 'booking_cancelled', 'teacher_room_assigned', 'teacher_cancellation_request',
+  'group_invite', 'group_join_request', 'request_approved', 'request_rejected', 'reminder', 'system'
+);
 ALTER TABLE public.notifications DROP CONSTRAINT IF EXISTS notifications_type_check;
 ALTER TABLE public.notifications ADD CONSTRAINT notifications_type_check CHECK (type IN (
   'booking_confirmed', 'booking_cancelled', 'teacher_room_assigned', 'teacher_cancellation_request',
-  'group_invite', 'request_approved', 'request_rejected', 'reminder', 'system'
+  'group_invite', 'group_join_request', 'request_approved', 'request_rejected', 'reminder', 'system'
 ));
 
 -- Helper: is the supplied user an admin of the supplied group?
@@ -1938,6 +1946,10 @@ END $$;
 -- ============================================================
 
 -- Allow new group admin notification type while keeping existing types.
+DELETE FROM public.notifications WHERE type NOT IN (
+  'booking_confirmed', 'booking_cancelled', 'teacher_room_assigned', 'teacher_cancellation_request',
+  'group_invite', 'group_join_request', 'request_approved', 'request_rejected', 'reminder', 'system'
+);
 ALTER TABLE public.notifications DROP CONSTRAINT IF EXISTS notifications_type_check;
 ALTER TABLE public.notifications ADD CONSTRAINT notifications_type_check CHECK (type IN (
   'booking_confirmed', 'booking_cancelled', 'teacher_room_assigned', 'teacher_cancellation_request',
@@ -2290,3 +2302,52 @@ BEGIN
   EXCEPTION WHEN duplicate_object THEN NULL;
   END;
 END $$;
+
+-- ============================================================
+-- University Events and Programmes Extension
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS public.events (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  date DATE NOT NULL,
+  place TEXT NOT NULL,
+  duration TEXT NOT NULL,
+  guests TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Enable Row-Level Security
+ALTER TABLE public.events ENABLE ROW LEVEL SECURITY;
+
+-- Allow SELECT for all authenticated users
+DROP POLICY IF EXISTS events_select ON public.events;
+CREATE POLICY events_select ON public.events FOR SELECT USING (auth.uid() IS NOT NULL);
+
+-- Allow INSERT/UPDATE/DELETE only for admin role
+DROP POLICY IF EXISTS events_insert_admin ON public.events;
+CREATE POLICY events_insert_admin ON public.events FOR INSERT WITH CHECK (public.current_user_role() = 'admin');
+
+-- Allow update/delete for admin role
+DROP POLICY IF EXISTS events_update_admin ON public.events;
+CREATE POLICY events_update_admin ON public.events FOR UPDATE USING (public.current_user_role() = 'admin');
+
+DROP POLICY IF EXISTS events_delete_admin ON public.events;
+CREATE POLICY events_delete_admin ON public.events FOR DELETE USING (public.current_user_role() = 'admin');
+
+-- Add trigger for updated_at
+DROP TRIGGER IF EXISTS events_updated_at ON public.events;
+CREATE TRIGGER events_updated_at BEFORE UPDATE ON public.events
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
+
+-- Add public.events to the realtime publication
+DO $$
+BEGIN
+  BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.events;
+  EXCEPTION WHEN duplicate_object THEN NULL;
+  END;
+END $$;
+

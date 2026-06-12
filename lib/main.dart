@@ -1093,6 +1093,7 @@ class BookingInfo {
   final String roomId;
   final String roomName;
   final String roomLocation;
+  final String roomBuilding;
   final List<String> facilities;
   final String userId;
   final String userName;
@@ -1112,6 +1113,7 @@ class BookingInfo {
     required this.roomId,
     required this.roomName,
     required this.roomLocation,
+    required this.roomBuilding,
     required this.facilities,
     required this.userId,
     required this.userName,
@@ -1154,6 +1156,7 @@ class BookingInfo {
           row['room_name']?.toString() ??
           'Study Room',
       roomLocation: '$building, Floor $floor',
+      roomBuilding: building,
       facilities: _asStringList(
         room['facilities'],
       ).map((e) => _tagLabel(e)).toList(),
@@ -1193,6 +1196,44 @@ class BookingInfo {
   String get facilitiesText =>
       facilities.isEmpty ? 'No facilities listed' : facilities.join(' • ');
 }
+
+class EventInfo {
+  final String id;
+  final String name;
+  final String description;
+  final String date;
+  final String place;
+  final String duration;
+  final String guests;
+  final DateTime createdAt;
+
+  EventInfo({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.date,
+    required this.place,
+    required this.duration,
+    required this.guests,
+    required this.createdAt,
+  });
+
+  factory EventInfo.fromMap(Map<String, dynamic> map) {
+    return EventInfo(
+      id: map['id']?.toString() ?? '',
+      name: map['name']?.toString() ?? '',
+      description: map['description']?.toString() ?? '',
+      date: map['date']?.toString() ?? '',
+      place: map['place']?.toString() ?? '',
+      duration: map['duration']?.toString() ?? '',
+      guests: map['guests']?.toString() ?? '',
+      createdAt: map['created_at'] != null ? DateTime.parse(map['created_at'].toString()) : DateTime.now(),
+    );
+  }
+
+  String get displayDate => _dateDisplay(date);
+}
+
 
 class StudyGroupInfo {
   final String id;
@@ -1889,6 +1930,54 @@ class UniSpaceRepository {
   Future<void> markNotificationRead(String id) async {
     await client.from('notifications').update({'is_read': true}).eq('id', id);
   }
+
+  Future<List<EventInfo>> fetchEvents() async {
+    final rows = await client.from('events').select().order('date', ascending: true);
+    return (rows as List)
+        .map((e) => EventInfo.fromMap(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  Future<void> addEvent({
+    required String name,
+    required String description,
+    required DateTime date,
+    required String place,
+    required String duration,
+    required String guests,
+  }) async {
+    await client.from('events').insert({
+      'name': name,
+      'description': description,
+      'date': _isoDate(date),
+      'place': place,
+      'duration': duration,
+      'guests': guests,
+    });
+  }
+
+  Future<void> updateEvent({
+    required String id,
+    required String name,
+    required String description,
+    required DateTime date,
+    required String place,
+    required String duration,
+    required String guests,
+  }) async {
+    await client.from('events').update({
+      'name': name,
+      'description': description,
+      'date': _isoDate(date),
+      'place': place,
+      'duration': duration,
+      'guests': guests,
+    }).eq('id', id);
+  }
+
+  Future<void> deleteEvent(String id) async {
+    await client.from('events').delete().eq('id', id);
+  }
 }
 
 class UniSpaceDashboard extends StatefulWidget {
@@ -1921,6 +2010,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   String _adminSlotFilter = 'all';
   DateTime? _adminDateFilter;
 
+  // Teacher filter variables
+  DateTime? _teacherDateFilter;
+  String _teacherBuildingFilter = 'All';
+  String _teacherStatusFilter = 'All';
+
   List<RoomInfo> _rooms = [];
   List<BookingInfo> _bookings = [];
   List<StudyGroupInfo> _groups = [];
@@ -1928,6 +2022,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   List<UserProfile> _users = [];
   List<RoomRequestInfo> _requests = [];
   List<SlotAvailability> _todaySlots = [];
+  List<EventInfo> _events = [];
 
   Map<String, UserProfile> get _userMap => {for (final u in _users) u.id: u};
   int get _unreadCount => _notifications.where((n) => !n.isRead).length;
@@ -2021,6 +2116,12 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         table: 'profiles',
         callback: (_) => _loadAll(silent: true),
       )
+      ..onPostgresChanges(
+        event: PostgresChangeEvent.all,
+        schema: 'public',
+        table: 'events',
+        callback: (_) => _loadAll(silent: true),
+      )
       ..subscribe();
   }
 
@@ -2042,6 +2143,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       final requests = _role == UniRole.teacher || _role == UniRole.admin
           ? await _repo.fetchRequests(_role, userMap)
           : <RoomRequestInfo>[];
+      final events = await _repo.fetchEvents();
       final List<SlotAvailability> todaySlots;
       if (rooms.isNotEmpty) {
         final todaySlotsList = await Future.wait(
@@ -2060,6 +2162,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         _groups = groups;
         _notifications = notifications;
         _requests = requests;
+        _events = events;
         _todaySlots = todaySlots;
         _error = null;
         _loading = false;
@@ -2180,26 +2283,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       case UniRole.teacher:
         return [
           const NavEntry('teacher-dashboard', '📊', 'Dashboard', iconData: Icons.dashboard_rounded, inactiveIconData: Icons.dashboard_outlined),
-          const NavEntry('teacher-bookings', '📋', 'Booking Management', iconData: Icons.assignment_rounded, inactiveIconData: Icons.assignment_outlined),
-          NavEntry(
-            'teacher-cancel',
-            '🔄',
-            'Cancellation Requests',
-            iconData: Icons.swap_horizontal_circle_rounded,
-            inactiveIconData: Icons.swap_horizontal_circle_outlined,
-            badge: _pendingRequests.isNotEmpty
-                ? _pendingRequests.length.toString()
-                : null,
-            badgeColor: AppPalette.warn,
-          ),
-          NavEntry(
-            'notifications',
-            '🔔',
-            'Notifications',
-            iconData: Icons.notifications_rounded,
-            inactiveIconData: Icons.notifications_outlined,
-            badge: _unreadCount > 0 ? _unreadCount.toString() : null,
-          ),
+          const NavEntry('teacher-assigned-rooms', '🏫', 'Assigned Rooms', iconData: Icons.meeting_room_rounded, inactiveIconData: Icons.meeting_room_outlined),
+          const NavEntry('teacher-events', '📅', 'Events', iconData: Icons.event_rounded, inactiveIconData: Icons.event_outlined),
         ];
       case UniRole.admin:
         return [
@@ -2216,6 +2301,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 ? _pendingRequests.length.toString()
                 : null,
           ),
+          const NavEntry('admin-events', '📅', 'Events', iconData: Icons.event_rounded, inactiveIconData: Icons.event_outlined),
           const NavEntry('admin-monitor', '📡', 'Booking Monitor', iconData: Icons.monitor_heart_rounded, inactiveIconData: Icons.monitor_heart_outlined),
         ];
     }
@@ -2554,6 +2640,10 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         return _profilePage();
       case 'teacher-dashboard':
         return _teacherDashboard();
+      case 'teacher-assigned-rooms':
+        return _teacherAssignedRoomsPage();
+      case 'teacher-events':
+        return _teacherEventsPage();
       case 'teacher-bookings':
         return _teacherBookings();
       case 'teacher-cancel':
@@ -2566,6 +2656,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         return _adminRooms();
       case 'admin-approval':
         return _adminApproval();
+      case 'admin-events':
+        return _adminEventsPage();
       case 'admin-monitor':
         return _adminMonitor();
       default:
@@ -3582,63 +3674,677 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     );
   }
 
+  BookingInfo? _latestUpcomingClass() {
+    final upcoming = _bookings.where((b) => _bookingIsUpcoming(b)).toList();
+    if (upcoming.isEmpty) return null;
+    upcoming.sort((a, b) {
+      final aTime = _bookingDateTime(a, a.startTime);
+      final bTime = _bookingDateTime(b, b.startTime);
+      if (aTime == null || bTime == null) return 0;
+      return aTime.compareTo(bTime);
+    });
+    return upcoming.first;
+  }
+
   Widget _teacherDashboard() {
+    final now = DateTime.now();
+    final hour = now.hour;
+    String greeting;
+    if (hour >= 5 && hour < 12) {
+      greeting = 'Good morning';
+    } else if (hour >= 12 && hour < 17) {
+      greeting = 'Good afternoon';
+    } else {
+      greeting = 'Good evening';
+    }
+    final teacherName = widget.user.fullName.split(' ').first;
+
+    final weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final dateStr = '${weekdays[now.weekday - 1]}, ${months[now.month - 1]} ${now.day}, ${now.year}';
+
+    final nextClass = _latestUpcomingClass();
     final ownRequests = _requests.length;
-    final activeAssigned = _bookings
-        .where((b) => b.status == 'active' || b.status == 'confirmed')
-        .length;
+    final activeAssigned = _bookings.where((b) => b.status == 'active' || b.status == 'confirmed').length;
+
+    // Upcoming events preview (next 2 events)
+    final upcomingEvents = _events.where((e) {
+      final eDate = DateTime.tryParse(e.date);
+      if (eDate == null) return false;
+      return !eDate.isBefore(DateTime(now.year, now.month, now.day));
+    }).toList();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _hero(
-          label: 'Teacher Portal 👨‍🏫',
-          title: widget.user.fullName,
-          subtitle:
-              'Admin-assigned rooms appear here instantly through Supabase Realtime.',
-          accent: AppPalette.accent3,
-          stats: [
-            ('${_bookings.length}', 'Assigned Bookings', AppPalette.accent3),
-            ('$ownRequests', 'My Requests', AppPalette.warn),
-          ],
+        // ── Greeting Header ──────────────────────────────────────────
+        Container(
+          margin: const EdgeInsets.only(bottom: 24),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      dateStr.toUpperCase(),
+                      style: _body(size: 11, color: AppPalette.accent3, weight: FontWeight.w800)
+                          .copyWith(letterSpacing: 1.2),
+                    ),
+                    const SizedBox(height: 6),
+                    RichText(
+                      text: TextSpan(
+                        children: [
+                          TextSpan(
+                            text: '$greeting, ',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 26, fontWeight: FontWeight.w400, color: AppPalette.text,
+                            ),
+                          ),
+                          TextSpan(
+                            text: teacherName,
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 26, fontWeight: FontWeight.w800, color: AppPalette.text,
+                            ),
+                          ),
+                          const TextSpan(text: ' 👨‍🏫', style: TextStyle(fontSize: 22)),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Welcome to your UniSpace teacher dashboard.',
+                      style: _body(size: 13, color: AppPalette.text2),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        _dashboardStatBadge('🏫 $activeAssigned Active Rooms'),
+                        const SizedBox(width: 8),
+                        _dashboardStatBadge('⏳ $ownRequests Total Requests'),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              // Live updates indicator
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: AppPalette.accent3.withOpacity(0.10),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: AppPalette.accent3.withOpacity(0.25)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 6, height: 6,
+                      decoration: const BoxDecoration(color: AppPalette.accent3, shape: BoxShape.circle),
+                    ),
+                    const SizedBox(width: 6),
+                    Text('Live updates', style: _body(size: 11, color: AppPalette.accent3, weight: FontWeight.w700)),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
-        _responsiveGrid(
-          minTileWidth: 240,
-          aspectRatio: 1.75,
+
+        // ── Quick Action Cards ─────────────────────────────────────────
+        Text(
+          'QUICK ACTIONS',
+          style: _body(size: 11, color: AppPalette.text3, weight: FontWeight.w800).copyWith(letterSpacing: 1.4),
+        ),
+        const SizedBox(height: 12),
+        Row(
           children: [
-            _statCard(
-              '🏫',
-              '$activeAssigned',
-              'Active Assignments',
-              'Admin assigned',
-              AppPalette.accent3,
+            Expanded(
+              child: _quickActionCard(
+                icon: Icons.meeting_room_rounded,
+                label: 'Assigned Rooms',
+                color: AppPalette.accent,
+                onTap: () => _navigate('teacher-assigned-rooms'),
+              ),
             ),
-            _statCard(
-              '⏳',
-              '${_pendingRequests.length}',
-              'Cancellation Pending',
-              'Awaiting admin',
-              AppPalette.warn,
-            ),
-            _statCard(
-              '✅',
-              '${_requests.where((r) => r.status == 'approved').length}',
-              'Approved Requests',
-              'Released slots',
-              AppPalette.accent,
+            const SizedBox(width: 12),
+            Expanded(
+              child: _quickActionCard(
+                icon: Icons.event_rounded,
+                label: 'University Events',
+                color: AppPalette.accent2,
+                onTap: () => _navigate('teacher-events'),
+              ),
             ),
           ],
-          bottom: 24,
         ),
-        _sectionHeader('🏫 My Assigned Rooms'),
-        _bookings.isEmpty
+        const SizedBox(height: 28),
+
+        // ── Next Class Section ────────────────────────────────────────
+        Text(
+          'NEXT CLASS SCHEDULE',
+          style: _body(size: 11, color: AppPalette.text3, weight: FontWeight.w800).copyWith(letterSpacing: 1.4),
+        ),
+        const SizedBox(height: 12),
+        if (nextClass == null)
+          _SurfaceCard(
+            padding: const EdgeInsets.all(24),
+            borderColor: AppPalette.border,
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('📅', style: TextStyle(fontSize: 32)),
+                  const SizedBox(height: 10),
+                  Text('No upcoming classes', style: _body(size: 15, weight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  Text('You have no upcoming admin-assigned classes.', style: _body(size: 12, color: AppPalette.text2)),
+                ],
+              ),
+            ),
+          )
+        else
+          _teacherNextClassCard(nextClass),
+
+        const SizedBox(height: 28),
+
+        // ── Upcoming University Events Card ───────────────────────────
+        Text(
+          'UPCOMING UNIVERSITY EVENTS',
+          style: _body(size: 11, color: AppPalette.text3, weight: FontWeight.w800).copyWith(letterSpacing: 1.4),
+        ),
+        const SizedBox(height: 12),
+        _teacherDashboardEventsCard(upcomingEvents),
+      ],
+    );
+  }
+
+  Widget _dashboardStatBadge(String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: AppPalette.surface2,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppPalette.border),
+      ),
+      child: Text(text, style: _body(size: 11, color: AppPalette.text2, weight: FontWeight.w700)),
+    );
+  }
+
+  Widget _teacherNextClassCard(BookingInfo booking) {
+    final cancellable = booking.canRequestTeacherCancellation;
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [AppPalette.accent.withOpacity(0.18), AppPalette.accent2.withOpacity(0.08)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppPalette.accent.withOpacity(0.35), width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: AppPalette.accent.withOpacity(0.06),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 46, height: 46,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  gradient: AppPalette.mainGradient,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Text('🏫', style: TextStyle(fontSize: 22)),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      booking.roomName,
+                      style: GoogleFonts.plusJakartaSans(fontSize: 18, fontWeight: FontWeight.w800, color: AppPalette.text),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '📍 ${booking.roomLocation}',
+                      style: _body(size: 13, color: AppPalette.text2),
+                    ),
+                  ],
+                ),
+              ),
+              _statusFromText(booking.status),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppPalette.surface.withOpacity(0.6),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppPalette.border),
+            ),
+            child: Row(
+              children: [
+                Expanded(child: _nextClassInfoItem(Icons.calendar_today_outlined, booking.displayDate)),
+                Container(width: 1, height: 20, color: AppPalette.border, margin: const EdgeInsets.symmetric(horizontal: 10)),
+                Expanded(child: _nextClassInfoItem(Icons.schedule_outlined, booking.timeRange)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                '🧰 ${booking.facilitiesText}',
+                style: _body(size: 11, color: AppPalette.text3),
+              ),
+              cancellable
+                  ? _actionButton(
+                      'Request Release',
+                      AppPalette.danger,
+                      () => _showTeacherRequestDialog(booking),
+                    )
+                  : Text(
+                      booking.status == 'cancellation_pending'
+                          ? 'Release Pending Approval'
+                          : 'Confirmed assignment',
+                      style: _body(size: 12, color: booking.status == 'cancellation_pending' ? AppPalette.warn : AppPalette.accent3, weight: FontWeight.bold),
+                    ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _nextClassInfoItem(IconData icon, String text) {
+    return Row(
+      children: [
+        Icon(icon, size: 15, color: AppPalette.accent),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            text,
+            style: _body(size: 12, color: AppPalette.text),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _teacherDashboardEventsCard(List<EventInfo> events) {
+    return _SurfaceCard(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.campaign_outlined, color: AppPalette.accent2, size: 20),
+                  const SizedBox(width: 8),
+                  Text('Upcoming University Events', style: _body(size: 15, weight: FontWeight.bold)),
+                ],
+              ),
+              TextButton(
+                onPressed: () => _navigate('teacher-events'),
+                child: Text('View All', style: _body(size: 12, color: AppPalette.accent2, weight: FontWeight.bold)),
+              ),
+            ],
+          ),
+          const Divider(color: AppPalette.border, height: 16),
+          if (events.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              child: Center(
+                child: Text(
+                  'No university events scheduled',
+                  style: _body(size: 13, color: AppPalette.text3),
+                ),
+              ),
+            )
+          else
+            Column(
+              children: events.take(2).map((event) {
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: AppPalette.accent2.withOpacity(0.10),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(Icons.event_note_rounded, color: AppPalette.accent2, size: 18),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              event.name,
+                              style: _body(size: 13, weight: FontWeight.bold),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              '${event.displayDate} • ${event.place}',
+                              style: _body(size: 11, color: AppPalette.text2),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
+        ],
+      ),
+    );
+  }
+
+  List<BookingInfo> _filteredTeacherBookings() {
+    List<BookingInfo> list = _bookings;
+    // Date filter
+    if (_teacherDateFilter != null) {
+      final dateStr = _isoDate(_teacherDateFilter!);
+      list = list.where((b) => b.date == dateStr).toList();
+    }
+    // Building filter
+    if (_teacherBuildingFilter != 'All') {
+      final query = _teacherBuildingFilter.toLowerCase().trim();
+      if (query == 'other') {
+        list = list.where((b) => !b.roomBuilding.toLowerCase().contains('rkb') && !b.roomBuilding.toLowerCase().contains('rab')).toList();
+      } else {
+        list = list.where((b) => b.roomBuilding.toLowerCase().contains(query)).toList();
+      }
+    }
+    // Status filter
+    if (_teacherStatusFilter != 'All') {
+      switch (_teacherStatusFilter) {
+        case 'Upcoming':
+          list = list.where(_bookingIsUpcoming).toList();
+          break;
+        case 'Completed':
+          list = list.where(_bookingIsCompleted).toList();
+          break;
+        case 'Cancelled':
+          list = list.where(_bookingIsCancelled).toList();
+          break;
+      }
+    }
+    return list;
+  }
+
+  Widget _teacherAssignedRoomsPage() {
+    final filtered = _filteredTeacherBookings();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _pageHeader(
+          'Assigned Rooms 🏫',
+          'View and filter your admin-assigned room schedules, buildings, and release requests.',
+        ),
+
+        // Filters Container
+        _SurfaceCard(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Building Filter
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Text('Building:', style: _body(size: 13, weight: FontWeight.bold, color: AppPalette.text2)),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: ['All', 'RKB', 'RAB', 'Other'].map((bldg) {
+                          final isSelected = _teacherBuildingFilter == bldg;
+                          return Padding(
+                            padding: const EdgeInsets.only(right: 6),
+                            child: ChoiceChip(
+                              label: Text(bldg, style: _body(size: 12, color: isSelected ? Colors.white : AppPalette.text2, weight: FontWeight.bold)),
+                              selected: isSelected,
+                              selectedColor: AppPalette.accent,
+                              backgroundColor: AppPalette.surface2,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                              onSelected: (val) {
+                                if (val) setState(() => _teacherBuildingFilter = bldg);
+                              },
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+
+              // Status Filter
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Text('Status:', style: _body(size: 13, weight: FontWeight.bold, color: AppPalette.text2)),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: ['All', 'Upcoming', 'Completed', 'Cancelled'].map((status) {
+                          final isSelected = _teacherStatusFilter == status;
+                          return Padding(
+                            padding: const EdgeInsets.only(right: 6),
+                            child: ChoiceChip(
+                              label: Text(status, style: _body(size: 12, color: isSelected ? Colors.white : AppPalette.text2, weight: FontWeight.bold)),
+                              selected: isSelected,
+                              selectedColor: AppPalette.accent2,
+                              backgroundColor: AppPalette.surface2,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                              onSelected: (val) {
+                                if (val) setState(() => _teacherStatusFilter = status);
+                              },
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+
+              // Date Picker Filter
+              Row(
+                children: [
+                  Icon(Icons.calendar_today_outlined, size: 16, color: AppPalette.text2),
+                  const SizedBox(width: 8),
+                  Text('Filter by Date:', style: _body(size: 13, weight: FontWeight.bold, color: AppPalette.text2)),
+                  const SizedBox(width: 12),
+                  InkWell(
+                    onTap: () async {
+                      final picked = await showDatePicker(
+                        context: context,
+                        initialDate: _teacherDateFilter ?? DateTime.now(),
+                        firstDate: DateTime.now().subtract(const Duration(days: 365)),
+                        lastDate: DateTime.now().add(const Duration(days: 365)),
+                        builder: (context, child) => Theme(
+                          data: ThemeData.dark().copyWith(
+                            colorScheme: const ColorScheme.dark(
+                              primary: AppPalette.accent,
+                              surface: AppPalette.surface,
+                            ),
+                          ),
+                          child: child!,
+                        ),
+                      );
+                      if (picked != null) {
+                        setState(() => _teacherDateFilter = picked);
+                      }
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: AppPalette.surface2,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: AppPalette.border),
+                      ),
+                      child: Text(
+                        _teacherDateFilter == null
+                            ? 'Select Date'
+                            : _dateDisplay(_isoDate(_teacherDateFilter!)),
+                        style: _body(size: 13, color: _teacherDateFilter == null ? AppPalette.text3 : AppPalette.text),
+                      ),
+                    ),
+                  ),
+                  if (_teacherDateFilter != null) ...[
+                    const SizedBox(width: 8),
+                    IconButton(
+                      icon: const Icon(Icons.clear_rounded, size: 18, color: AppPalette.danger),
+                      onPressed: () => setState(() => _teacherDateFilter = null),
+                      tooltip: 'Clear Date Filter',
+                    ),
+                  ],
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 20),
+
+        // Bookings List
+        filtered.isEmpty
             ? _emptyState(
-                'No assigned rooms yet',
-                'Rooms assigned by Admin will appear here with date, time slot, and cancellation option.',
+                'No assigned rooms match filters',
+                'Change your building, status, or date filters to find assigned classes.',
               )
-            : Column(
-                children: _bookings.map(_teacherAssignedBookingCard).toList(),
+            : ListView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: filtered.length,
+                itemBuilder: (context, index) {
+                  return _teacherAssignedBookingCard(filtered[index]);
+                },
               ),
       ],
+    );
+  }
+
+  Widget _teacherEventsPage() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _pageHeader(
+          'University Events 📅',
+          'View upcoming programmes, guest lectures, workshops, and other events.',
+        ),
+        _events.isEmpty
+            ? _emptyState(
+                'No events scheduled',
+                'Check back later for upcoming university programmes and events.',
+              )
+            : GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: _events.length,
+                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: 400,
+                  mainAxisSpacing: 16,
+                  crossAxisSpacing: 16,
+                  childAspectRatio: 1.45,
+                ),
+                itemBuilder: (context, index) {
+                  final event = _events[index];
+                  return _teacherEventCard(event);
+                },
+              ),
+      ],
+    );
+  }
+
+  Widget _teacherEventCard(EventInfo event) {
+    return _SurfaceCard(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Text(
+                  event.name,
+                  style: _body(size: 16, weight: FontWeight.bold, color: AppPalette.text),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: AppPalette.accent2.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: AppPalette.accent2.withOpacity(0.30)),
+                ),
+                child: Text(
+                  'Programme',
+                  style: _body(size: 11, color: AppPalette.accent2, weight: FontWeight.w700),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          if (event.description.isNotEmpty) ...[
+            Text(
+              event.description,
+              style: _body(size: 12, color: AppPalette.text2),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 12),
+          ],
+          const Spacer(),
+          _eventDetailRow(Icons.calendar_today_outlined, event.displayDate),
+          const SizedBox(height: 6),
+          _eventDetailRow(Icons.place_outlined, event.place),
+          const SizedBox(height: 6),
+          _eventDetailRow(Icons.schedule_outlined, event.duration),
+          if (event.guests.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            _eventDetailRow(Icons.people_outline_rounded, event.guests),
+          ],
+          const Spacer(),
+        ],
+      ),
     );
   }
 
@@ -4176,6 +4882,321 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               )
             : _roomGrid(_rooms, adminMode: true),
       ],
+    );
+  }
+
+  Widget _adminEventsPage() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _pageHeader(
+          'University Events 📅',
+          'Manage upcoming university programmes, schedules, places, and guest lists.',
+        ),
+        SizedBox(
+          width: 200,
+          child: _gradientButton(
+            '＋ Add New Event',
+            () => _showEventDialog(),
+          ),
+        ),
+        const SizedBox(height: 20),
+        _events.isEmpty
+            ? _emptyState(
+                'No upcoming events found',
+                'Add university programmes or events to let teachers and students view them.',
+              )
+            : GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: _events.length,
+                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: 400,
+                  mainAxisSpacing: 16,
+                  crossAxisSpacing: 16,
+                  childAspectRatio: 1.3,
+                ),
+                itemBuilder: (context, index) {
+                  final event = _events[index];
+                  return _adminEventCard(event);
+                },
+              ),
+      ],
+    );
+  }
+
+  Widget _adminEventCard(EventInfo event) {
+    return _SurfaceCard(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Text(
+                  event.name,
+                  style: _body(size: 16, weight: FontWeight.bold, color: AppPalette.text),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: AppPalette.accent.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: AppPalette.accent.withOpacity(0.30)),
+                ),
+                child: Text(
+                  'Event',
+                  style: _body(size: 11, color: AppPalette.accent, weight: FontWeight.w700),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          if (event.description.isNotEmpty) ...[
+            Text(
+              event.description,
+              style: _body(size: 12, color: AppPalette.text2),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 12),
+          ],
+          const Spacer(),
+          _eventDetailRow(Icons.calendar_today_outlined, event.displayDate),
+          const SizedBox(height: 6),
+          _eventDetailRow(Icons.place_outlined, event.place),
+          const SizedBox(height: 6),
+          _eventDetailRow(Icons.schedule_outlined, event.duration),
+          if (event.guests.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            _eventDetailRow(Icons.people_outline_rounded, event.guests),
+          ],
+          const Spacer(),
+          const Divider(color: AppPalette.border, height: 20),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.edit_rounded, color: AppPalette.accent, size: 20),
+                onPressed: () => _showEventDialog(event: event),
+                tooltip: 'Edit Event',
+              ),
+              IconButton(
+                icon: const Icon(Icons.delete_outline_rounded, color: AppPalette.danger, size: 20),
+                onPressed: () {
+                  showDialog<void>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      backgroundColor: AppPalette.surface,
+                      title: Text('Delete Event', style: _body(size: 16, weight: FontWeight.bold)),
+                      content: Text('Are you sure you want to delete this event? This action cannot be undone.', style: _body(size: 14)),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(ctx).pop(),
+                          child: Text('Cancel', style: _body(color: AppPalette.text2)),
+                        ),
+                        TextButton(
+                          onPressed: () {
+                            Navigator.of(ctx).pop();
+                            _runAction(
+                              () => _repo.deleteEvent(event.id),
+                              '🗑️ Event deleted successfully',
+                            );
+                          },
+                          child: Text('Delete', style: _body(color: AppPalette.danger, weight: FontWeight.bold)),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+                tooltip: 'Delete Event',
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _eventDetailRow(IconData icon, String text) {
+    return Row(
+      children: [
+        Icon(icon, size: 14, color: AppPalette.accent2),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            text,
+            style: _body(size: 12, color: AppPalette.text2),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _showEventDialog({EventInfo? event}) async {
+    final name = TextEditingController(text: event?.name ?? '');
+    final description = TextEditingController(text: event?.description ?? '');
+    final place = TextEditingController(text: event?.place ?? '');
+    final duration = TextEditingController(text: event?.duration ?? '');
+    final guests = TextEditingController(text: event?.guests ?? '');
+    DateTime selectedDate = event != null ? DateTime.tryParse(event.date) ?? DateTime.now() : DateTime.now();
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) {
+          return AlertDialog(
+            backgroundColor: AppPalette.surface,
+            title: Text(
+              event == null ? 'Add University Event' : 'Edit University Event',
+              style: _body(size: 18, weight: FontWeight.w800),
+            ),
+            content: SizedBox(
+              width: 500,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _fieldLabel('Event Name *'),
+                    _textInput(name, 'e.g. Annual Convocation 2026'),
+                    const SizedBox(height: 12),
+                    _fieldLabel('Description'),
+                    TextField(
+                      controller: description,
+                      maxLines: 3,
+                      style: _body(size: 14),
+                      decoration: _inputDecoration('e.g. Details about the convocation program...'),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _fieldLabel('Date *'),
+                              InkWell(
+                                onTap: () async {
+                                  final picked = await showDatePicker(
+                                    context: context,
+                                    initialDate: selectedDate,
+                                    firstDate: DateTime.now().subtract(const Duration(days: 30)),
+                                    lastDate: DateTime.now().add(const Duration(days: 365)),
+                                    builder: (context, child) => Theme(
+                                      data: ThemeData.dark().copyWith(
+                                        colorScheme: const ColorScheme.dark(
+                                          primary: AppPalette.accent,
+                                          surface: AppPalette.surface,
+                                        ),
+                                      ),
+                                      child: child!,
+                                    ),
+                                  );
+                                  if (picked != null) {
+                                    setModalState(() => selectedDate = picked);
+                                  }
+                                },
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+                                  decoration: BoxDecoration(
+                                    color: AppPalette.surface2,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: AppPalette.border),
+                                  ),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Text(
+                                        _dateDisplay(_isoDate(selectedDate)),
+                                        style: _body(size: 14),
+                                      ),
+                                      const Icon(Icons.calendar_today_rounded, size: 16, color: AppPalette.text2),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _fieldLabel('Duration *'),
+                              _textInput(duration, 'e.g. 3 Hours or 10am-1pm'),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    _fieldLabel('Place / Location *'),
+                    _textInput(place, 'e.g. Main Auditorium'),
+                    const SizedBox(height: 12),
+                    _fieldLabel('Guests / Speakers'),
+                    _textInput(guests, 'e.g. Dr. John Doe, Prof. Jane Smith'),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text('Cancel', style: _body(color: AppPalette.text2)),
+              ),
+              TextButton(
+                onPressed: () {
+                  if (name.text.trim().isEmpty || place.text.trim().isEmpty || duration.text.trim().isEmpty) {
+                    _showToast('⚠️ Please fill all required fields');
+                    return;
+                  }
+                  Navigator.of(context).pop();
+                  if (event == null) {
+                    _runAction(
+                      () => _repo.addEvent(
+                        name: name.text.trim(),
+                        description: description.text.trim(),
+                        date: selectedDate,
+                        place: place.text.trim(),
+                        duration: duration.text.trim(),
+                        guests: guests.text.trim(),
+                      ),
+                      '🎉 Event added successfully!',
+                    );
+                  } else {
+                    _runAction(
+                      () => _repo.updateEvent(
+                        id: event.id,
+                        name: name.text.trim(),
+                        description: description.text.trim(),
+                        date: selectedDate,
+                        place: place.text.trim(),
+                        duration: duration.text.trim(),
+                        guests: guests.text.trim(),
+                      ),
+                      '✏️ Event updated successfully!',
+                    );
+                  }
+                },
+                child: Text(
+                  event == null ? 'Add Event' : 'Save Changes',
+                  style: _body(color: AppPalette.accent, weight: FontWeight.bold),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 

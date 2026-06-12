@@ -2279,6 +2279,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
           const NavEntry('rooms', '🚪', 'Browse Rooms', iconData: Icons.meeting_room_rounded, inactiveIconData: Icons.meeting_room_outlined),
           const NavEntry('bookings', '📅', 'My Bookings', iconData: Icons.calendar_month_rounded, inactiveIconData: Icons.calendar_month_outlined),
           const NavEntry('groups', '👥', 'Group Study', iconData: Icons.groups_rounded, inactiveIconData: Icons.groups_outlined),
+          const NavEntry('student-events', '📅', 'Events', iconData: Icons.event_rounded, inactiveIconData: Icons.event_outlined),
         ];
       case UniRole.teacher:
         return [
@@ -2634,6 +2635,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         return _myBookingsPage();
       case 'groups':
         return _groupsPage();
+      case 'student-events':
+        return _studentEventsPage();
       case 'notifications':
         return _notificationsPage();
       case 'profile':
@@ -3354,12 +3357,20 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   }
 
   Widget _studentHome() {
+    final now = DateTime.now();
+    final upcomingEvents = _events.where((e) {
+      final eDate = DateTime.tryParse(e.date);
+      if (eDate == null) return false;
+      return !eDate.isBefore(DateTime(now.year, now.month, now.day));
+    }).toList();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _studentHomeGreetingHeader(),
         _studentUpcomingBookingCard(),
         _studentLiveOccupancyCard(),
+        _studentHomeEventsCard(upcomingEvents),
         _sectionHeader(
           '⚡ Quick Shortcuts',
         ),
@@ -3372,6 +3383,134 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         _studentPopularRoomsGrid(),
       ],
     ).animate().fadeIn(duration: 450.ms).slideY(begin: 0.03, curve: Curves.easeOutCubic);
+  }
+
+  Widget _studentHomeEventsCard(List<EventInfo> events) {
+    if (events.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _sectionHeader(
+            '📅 Upcoming Events',
+            action: 'View All →',
+            onAction: () => _navigate('student-events'),
+          ),
+          SizedBox(
+            height: 160,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
+              itemCount: events.length,
+              separatorBuilder: (context, index) => const SizedBox(width: 14),
+              itemBuilder: (context, index) {
+                final event = events[index];
+                return _studentHomeHorizontalEventCard(event);
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _studentHomeHorizontalEventCard(EventInfo event) {
+    return Container(
+      width: 290,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            AppPalette.accent2.withOpacity(0.12),
+            AppPalette.accent.withOpacity(0.04),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppPalette.accent2.withOpacity(0.25), width: 1.2),
+        boxShadow: [
+          BoxShadow(
+            color: AppPalette.accent2.withOpacity(0.04),
+            blurRadius: 12,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppPalette.accent2.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppPalette.accent2.withOpacity(0.30)),
+                ),
+                child: Text(
+                  'Campus Event',
+                  style: _body(size: 9, color: AppPalette.accent2, weight: FontWeight.w800),
+                ),
+              ),
+              const Spacer(),
+              Text(
+                event.displayDate,
+                style: _body(size: 11, color: AppPalette.text2, weight: FontWeight.w600),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            event.name,
+            style: _body(size: 14, weight: FontWeight.bold, color: AppPalette.text),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 4),
+          if (event.description.isNotEmpty)
+            Expanded(
+              child: Text(
+                event.description,
+                style: _body(size: 11, color: AppPalette.text2),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            )
+          else
+            const Spacer(),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              const Icon(Icons.place_outlined, size: 12, color: AppPalette.accent2),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  event.place,
+                  style: _body(size: 11, color: AppPalette.text2),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (event.duration.isNotEmpty) ...[
+                const SizedBox(width: 8),
+                const Icon(Icons.schedule_outlined, size: 12, color: AppPalette.accent2),
+                const SizedBox(width: 4),
+                Text(
+                  event.duration,
+                  style: _body(size: 11, color: AppPalette.text2),
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _roomsPage() {
@@ -4271,16 +4410,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 'No events scheduled',
                 'Check back later for upcoming university programmes and events.',
               )
-            : GridView.builder(
+            : ListView.separated(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 itemCount: _events.length,
-                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                  maxCrossAxisExtent: 400,
-                  mainAxisSpacing: 16,
-                  crossAxisSpacing: 16,
-                  childAspectRatio: 1.45,
-                ),
+                separatorBuilder: (context, index) => const SizedBox(height: 16),
                 itemBuilder: (context, index) {
                   final event = _events[index];
                   return _teacherEventCard(event);
@@ -4327,12 +4461,10 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             Text(
               event.description,
               style: _body(size: 12, color: AppPalette.text2),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 12),
           ],
-          const Spacer(),
+          const SizedBox(height: 4),
           _eventDetailRow(Icons.calendar_today_outlined, event.displayDate),
           const SizedBox(height: 6),
           _eventDetailRow(Icons.place_outlined, event.place),
@@ -4342,7 +4474,88 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             const SizedBox(height: 6),
             _eventDetailRow(Icons.people_outline_rounded, event.guests),
           ],
-          const Spacer(),
+        ],
+      ),
+    );
+  }
+
+  Widget _studentEventsPage() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _pageHeader(
+          'University Events 📅',
+          'View upcoming programmes, guest lectures, workshops, and other events.',
+        ),
+        _events.isEmpty
+            ? _emptyState(
+                'No events scheduled',
+                'Check back later for upcoming university programmes and events.',
+              )
+            : ListView.separated(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: _events.length,
+                separatorBuilder: (context, index) => const SizedBox(height: 16),
+                itemBuilder: (context, index) {
+                  final event = _events[index];
+                  return _studentEventCard(event);
+                },
+              ),
+      ],
+    );
+  }
+
+  Widget _studentEventCard(EventInfo event) {
+    return _SurfaceCard(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Text(
+                  event.name,
+                  style: _body(size: 16, weight: FontWeight.bold, color: AppPalette.text),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: AppPalette.accent2.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: AppPalette.accent2.withOpacity(0.30)),
+                ),
+                child: Text(
+                  'Programme',
+                  style: _body(size: 11, color: AppPalette.accent2, weight: FontWeight.w700),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          if (event.description.isNotEmpty) ...[
+            Text(
+              event.description,
+              style: _body(size: 12, color: AppPalette.text2),
+            ),
+            const SizedBox(height: 12),
+          ],
+          const SizedBox(height: 4),
+          _eventDetailRow(Icons.calendar_today_outlined, event.displayDate),
+          const SizedBox(height: 6),
+          _eventDetailRow(Icons.place_outlined, event.place),
+          const SizedBox(height: 6),
+          _eventDetailRow(Icons.schedule_outlined, event.duration),
+          if (event.guests.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            _eventDetailRow(Icons.people_outline_rounded, event.guests),
+          ],
         ],
       ),
     );
@@ -4906,16 +5119,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 'No upcoming events found',
                 'Add university programmes or events to let teachers and students view them.',
               )
-            : GridView.builder(
+            : ListView.separated(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 itemCount: _events.length,
-                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                  maxCrossAxisExtent: 400,
-                  mainAxisSpacing: 16,
-                  crossAxisSpacing: 16,
-                  childAspectRatio: 1.3,
-                ),
+                separatorBuilder: (context, index) => const SizedBox(height: 16),
                 itemBuilder: (context, index) {
                   final event = _events[index];
                   return _adminEventCard(event);
@@ -4962,12 +5170,10 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             Text(
               event.description,
               style: _body(size: 12, color: AppPalette.text2),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 12),
           ],
-          const Spacer(),
+          const SizedBox(height: 4),
           _eventDetailRow(Icons.calendar_today_outlined, event.displayDate),
           const SizedBox(height: 6),
           _eventDetailRow(Icons.place_outlined, event.place),
@@ -4977,7 +5183,6 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             const SizedBox(height: 6),
             _eventDetailRow(Icons.people_outline_rounded, event.guests),
           ],
-          const Spacer(),
           const Divider(color: AppPalette.border, height: 20),
           Row(
             mainAxisAlignment: MainAxisAlignment.end,

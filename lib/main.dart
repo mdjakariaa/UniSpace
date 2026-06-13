@@ -4704,7 +4704,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 crossAxisCount: cols,
                 mainAxisSpacing: 14,
                 crossAxisSpacing: 14,
-                mainAxisExtent: 140,
+                mainAxisExtent: 144,
               ),
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
@@ -4846,7 +4846,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     bool highlight = false,
   }) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         color: AppPalette.surface,
         borderRadius: BorderRadius.circular(18),

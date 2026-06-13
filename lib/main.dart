@@ -4699,13 +4699,15 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         LayoutBuilder(
           builder: (ctx, c) {
             final cols = c.maxWidth > 700 ? 4 : c.maxWidth > 440 ? 2 : 1;
-            return GridView.count(
-              crossAxisCount: cols,
+            return GridView(
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: cols,
+                mainAxisSpacing: 14,
+                crossAxisSpacing: 14,
+                mainAxisExtent: 140,
+              ),
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
-              mainAxisSpacing: 14,
-              crossAxisSpacing: 14,
-              childAspectRatio: cols >= 4 ? 1.45 : 1.7,
               children: [
                 _adminStatCard(
                   icon: Icons.people_alt_rounded,
@@ -4882,23 +4884,41 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 ),
             ],
           ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                value,
-                style: GoogleFonts.plusJakartaSans(
-                  fontSize: 26,
-                  fontWeight: FontWeight.w800,
-                  color: AppPalette.text,
-                  height: 1,
+          const SizedBox(height: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    value,
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w800,
+                      color: AppPalette.text,
+                      height: 1,
+                    ),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 3),
-              Text(label, style: _body(size: 12, color: AppPalette.text2)),
-              const SizedBox(height: 4),
-              Text(sub, style: _body(size: 11, color: subColor, weight: FontWeight.w600)),
-            ],
+                const SizedBox(height: 3),
+                Text(
+                  label,
+                  style: _body(size: 12, color: AppPalette.text2),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  sub,
+                  style: _body(size: 11, color: subColor, weight: FontWeight.w600),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -4966,7 +4986,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   }
 
   Widget _adminRecentActivity() {
-    final recent = _bookings.take(6).toList();
+    final recent = _bookings.where((b) => b.isTeacherRoomBooking).take(6).toList();
     return _SurfaceCard(
       padding: const EdgeInsets.all(20),
       child: Column(
@@ -4994,7 +5014,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 16),
               child: Center(
-                child: Text('No bookings yet', style: _body(size: 13, color: AppPalette.text2)),
+                child: Text('No teacher activity yet', style: _body(size: 13, color: AppPalette.text2)),
               ),
             )
           else
@@ -9058,20 +9078,35 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(7),
-                    decoration: BoxDecoration(
-                      color: AppPalette.accent.withOpacity(0.12),
-                      borderRadius: BorderRadius.circular(8),
+              Expanded(
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(7),
+                      decoration: BoxDecoration(
+                        color: AppPalette.accent.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.bar_chart_rounded, color: AppPalette.accent, size: 16),
                     ),
-                    child: const Icon(Icons.bar_chart_rounded, color: AppPalette.accent, size: 16),
-                  ),
-                  const SizedBox(width: 10),
-                  _heading('Bookings This Week', size: 14),
-                ],
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Bookings This Week',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                          color: AppPalette.text,
+                          height: 1.18,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
               ),
+              const SizedBox(width: 8),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
@@ -9088,7 +9123,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
           ),
           const SizedBox(height: 20),
           SizedBox(
-            height: 130,
+            height: 155,
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: data.entries.map((entry) {
@@ -9103,12 +9138,15 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                       children: [
                         // Value label
                         if (count > 0)
-                          Text(
-                            count.toInt().toString(),
-                            style: _body(
-                              size: 10,
-                              color: isToday ? AppPalette.accent : AppPalette.text2,
-                              weight: isToday ? FontWeight.w800 : FontWeight.w600,
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              count.toInt().toString(),
+                              style: _body(
+                                size: 10,
+                                color: isToday ? AppPalette.accent : AppPalette.text2,
+                                weight: isToday ? FontWeight.w800 : FontWeight.w600,
+                              ),
                             ),
                           )
                         else
@@ -9148,12 +9186,15 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                         ),
                         const SizedBox(height: 6),
                         // Day label
-                        Text(
-                          entry.key,
-                          style: _body(
-                            size: 10,
-                            color: isToday ? AppPalette.accent : AppPalette.text3,
-                            weight: isToday ? FontWeight.w800 : FontWeight.w500,
+                        FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            entry.key,
+                            style: _body(
+                              size: 10,
+                              color: isToday ? AppPalette.accent : AppPalette.text3,
+                              weight: isToday ? FontWeight.w800 : FontWeight.w500,
+                            ),
                           ),
                         ),
                         if (isToday)
@@ -9180,11 +9221,12 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   }
 
   Widget _donutChart() {
-    final total = _rooms.isEmpty ? 1 : _rooms.length;
+    final total = _rooms.length;
     final available = _rooms.where((r) => !r.isFull && !r.isPending).length;
     final booked = total - available;
-    final pct = ((booked / total) * 100).round();
-    final availPct = 100 - pct;
+    final pct = total == 0 ? 0 : ((booked / total) * 100).round();
+    final availPct = total == 0 ? 0 : 100 - pct;
+    final progressValue = total == 0 ? 0.0 : booked / total;
 
     return _SurfaceCard(
       padding: const EdgeInsets.all(20),
@@ -9202,7 +9244,19 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 child: const Icon(Icons.donut_large_rounded, color: AppPalette.accent2, size: 16),
               ),
               const SizedBox(width: 10),
-              _heading('Room Usage', size: 14),
+              Expanded(
+                child: Text(
+                  'Room Usage',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: AppPalette.text,
+                    height: 1.18,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 18),
@@ -9216,20 +9270,20 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 child: Stack(
                   alignment: Alignment.center,
                   children: [
-                    // Background track
+                    // Background track (Available segment color indicator)
                     SizedBox(
                       width: 100, height: 100,
                       child: CircularProgressIndicator(
-                        value: 1,
+                        value: 1.0,
                         strokeWidth: 14,
-                        color: AppPalette.surface2,
+                        color: AppPalette.accent3.withOpacity(0.24),
                       ),
                     ),
-                    // Foreground progress
+                    // Foreground progress (Occupied segment color indicator)
                     SizedBox(
                       width: 100, height: 100,
                       child: CircularProgressIndicator(
-                        value: booked / total,
+                        value: progressValue,
                         strokeWidth: 14,
                         backgroundColor: Colors.transparent,
                         valueColor: const AlwaysStoppedAnimation<Color>(AppPalette.accent),
@@ -9323,8 +9377,19 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(count, style: _body(size: 10, color: AppPalette.text2)),
-                Text(pct, style: _body(size: 10, color: color, weight: FontWeight.w700)),
+                Flexible(
+                  child: Text(
+                    count,
+                    style: _body(size: 10, color: AppPalette.text2),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  pct,
+                  style: _body(size: 10, color: color, weight: FontWeight.w700),
+                ),
               ],
             ),
           ],

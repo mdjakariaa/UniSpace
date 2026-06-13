@@ -3635,8 +3635,13 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   String _bookingCurrentStatus(BookingInfo booking) {
     if (_bookingIsCancelled(booking)) return 'cancelled';
     if (_bookingIsCompleted(booking)) return 'completed';
-    if (booking.status.toLowerCase().trim() == 'pending') return 'pending';
-    if (booking.status.toLowerCase().trim() == 'active') return 'active';
+    final normalized = booking.status.toLowerCase().trim();
+    if (normalized == 'pending') return 'pending';
+    if (normalized == 'cancellation_pending') return 'cancellation_pending';
+    if (normalized == 'active') return 'active';
+    if (normalized == 'released') return 'released';
+    if (normalized == 'approved') return 'approved';
+    if (normalized == 'rejected') return 'rejected';
     return 'confirmed';
   }
 
@@ -3844,7 +3849,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
 
     final nextClass = _latestUpcomingClass();
     final ownRequests = _requests.length;
-    final activeAssigned = _bookings.where((b) => b.status == 'active' || b.status == 'confirmed').length;
+    final activeAssigned = _bookings.where((b) => (b.status == 'active' || b.status == 'confirmed') && _bookingIsUpcoming(b)).length;
 
     // Upcoming events preview (next 2 events)
     final upcomingEvents = _events.where((e) {
@@ -5707,8 +5712,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       flexes: const [2, 2, 2, 1, 1],
       rows: bookings.map((b) {
         final studentCancellable = studentActions && _bookingIsUpcoming(b);
-        final teacherCancellable = b.canRequestTeacherCancellation;
-        final statusText = studentActions ? _bookingCurrentStatus(b) : b.status;
+        final teacherCancellable = b.canRequestTeacherCancellation && !_bookingIsCompleted(b);
+        final statusText = (studentActions || teacherActions) ? _bookingCurrentStatus(b) : b.status;
 
         if (adminActions) {
           return [
@@ -8320,7 +8325,9 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   }
 
   Widget _teacherAssignedBookingCard(BookingInfo booking) {
-    final cancellable = booking.canRequestTeacherCancellation;
+    final isCompleted = _bookingIsCompleted(booking);
+    final cancellable = booking.canRequestTeacherCancellation && !isCompleted;
+    final displayStatus = _bookingCurrentStatus(booking);
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: _SurfaceCard(
@@ -8358,7 +8365,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                     ],
                   ),
                 ),
-                _statusFromText(booking.status),
+                _statusFromText(displayStatus),
               ],
             ),
             const SizedBox(height: 14),
@@ -8380,21 +8387,23 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 ),
               ],
             ),
-            const SizedBox(height: 14),
-            Align(
-              alignment: Alignment.centerRight,
-              child: cancellable
-                  ? _actionButton(
-                      'Request Cancellation',
-                      AppPalette.danger,
-                      () => _showTeacherRequestDialog(booking),
-                    )
-                  : _plain(
-                      booking.status == 'cancellation_pending'
-                          ? 'Cancellation Pending Admin Approval'
-                          : 'No action available',
-                    ),
-            ),
+            if (!isCompleted) ...[
+              const SizedBox(height: 14),
+              Align(
+                alignment: Alignment.centerRight,
+                child: cancellable
+                    ? _actionButton(
+                        'Request Cancellation',
+                        AppPalette.danger,
+                        () => _showTeacherRequestDialog(booking),
+                      )
+                    : _plain(
+                        booking.status == 'cancellation_pending'
+                            ? 'Cancellation Pending Admin Approval'
+                            : 'No action available',
+                      ),
+              ),
+            ],
           ],
         ),
       ),

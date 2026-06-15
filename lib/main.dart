@@ -1197,6 +1197,132 @@ class BookingInfo {
       facilities.isEmpty ? 'No facilities listed' : facilities.join(' • ');
 }
 
+class WeeklyScheduleInfo {
+  final String id;
+  final String roomId;
+  final String roomName;
+  final String roomLocation;
+  final String teacherId;
+  final String teacherName;
+  final String teacherEmail;
+  final int dayOfWeek;          // 0=Sun … 6=Sat
+  final String dayName;         // 'Sunday' … 'Saturday'
+  final String startTime;
+  final String endTime;
+  final String timeSlot;
+  final String status;          // 'active', 'cancelled'
+  final DateTime nextDate;      // Next upcoming date matching dayOfWeek
+  final String? assignedBy;
+  final DateTime createdAt;
+
+  const WeeklyScheduleInfo({
+    required this.id,
+    required this.roomId,
+    required this.roomName,
+    required this.roomLocation,
+    required this.teacherId,
+    required this.teacherName,
+    required this.teacherEmail,
+    required this.dayOfWeek,
+    required this.dayName,
+    required this.startTime,
+    required this.endTime,
+    required this.timeSlot,
+    required this.status,
+    required this.nextDate,
+    this.assignedBy,
+    required this.createdAt,
+  });
+
+  factory WeeklyScheduleInfo.fromMap(Map<String, dynamic> row) {
+    final nextDateRaw = row['next_date']?.toString() ?? '';
+    final nextDate = DateTime.tryParse(nextDateRaw) ?? _nextDateForDow(
+      _asInt(row['day_of_week'], 0),
+    );
+    return WeeklyScheduleInfo(
+      id:           row['id']?.toString() ?? '',
+      roomId:       row['room_id']?.toString() ?? '',
+      roomName:     row['room_name']?.toString() ?? 'Room',
+      roomLocation: row['room_location']?.toString() ?? '',
+      teacherId:    row['teacher_id']?.toString() ?? '',
+      teacherName:  row['teacher_name']?.toString() ?? 'Teacher',
+      teacherEmail: row['teacher_email']?.toString() ?? '',
+      dayOfWeek:    _asInt(row['day_of_week'], 0),
+      dayName:      row['day_name']?.toString() ?? _dowName(_asInt(row['day_of_week'], 0)),
+      startTime:    _shortTime(row['start_time']?.toString() ?? ''),
+      endTime:      _shortTime(row['end_time']?.toString() ?? ''),
+      timeSlot:     row['time_slot']?.toString() ?? '',
+      status:       row['status']?.toString() ?? 'active',
+      nextDate:     nextDate,
+      assignedBy:   row['assigned_by']?.toString(),
+      createdAt:    DateTime.tryParse(row['created_at']?.toString() ?? '') ?? DateTime.now(),
+    );
+  }
+
+  String get nextDateDisplay => _dateDisplay(_isoDate(nextDate));
+  String get fullDayLabel => 'Every $dayName';
+  String get displayInfo => '$fullDayLabel • $timeSlot';
+}
+
+class ScheduleExceptionInfo {
+  final String id;
+  final String scheduleId;
+  final String roomName;
+  final String teacherName;
+  final String dayName;
+  final String timeSlot;
+  final String skipDate;
+  final String reason;
+  final String requestedBy;
+  final String status;
+  final DateTime createdAt;
+
+  const ScheduleExceptionInfo({
+    required this.id,
+    required this.scheduleId,
+    required this.roomName,
+    required this.teacherName,
+    required this.dayName,
+    required this.timeSlot,
+    required this.skipDate,
+    required this.reason,
+    required this.requestedBy,
+    required this.status,
+    required this.createdAt,
+  });
+
+  factory ScheduleExceptionInfo.fromMap(Map<String, dynamic> row) {
+    return ScheduleExceptionInfo(
+      id:          row['id']?.toString() ?? '',
+      scheduleId:  row['schedule_id']?.toString() ?? '',
+      roomName:    row['room_name']?.toString() ?? 'Room',
+      teacherName: row['teacher_name']?.toString() ?? 'Teacher',
+      dayName:     row['day_name']?.toString() ?? '',
+      timeSlot:    row['time_slot']?.toString() ?? '',
+      skipDate:    row['skip_date']?.toString() ?? '',
+      reason:      row['reason']?.toString() ?? '',
+      requestedBy: row['requested_by']?.toString() ?? '',
+      status:      row['status']?.toString() ?? 'pending',
+      createdAt:   DateTime.tryParse(row['created_at']?.toString() ?? '') ?? DateTime.now(),
+    );
+  }
+
+  String get skipDateDisplay => _dateDisplay(skipDate);
+}
+
+String _dowName(int dow) {
+  const names = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  return (dow >= 0 && dow < 7) ? names[dow] : 'Day';
+}
+
+DateTime _nextDateForDow(int dow) {
+  final today = DateTime.now();
+  int todayDow = today.weekday % 7; // Dart: Mon=1…Sun=7, convert to 0=Sun
+  int daysAhead = (dow - todayDow + 7) % 7;
+  if (daysAhead == 0) daysAhead = 7;
+  return today.add(Duration(days: daysAhead));
+}
+
 class EventInfo {
   final String id;
   final String name;
@@ -1790,14 +1916,55 @@ class UniSpaceRepository {
     );
   }
 
-  Future<void> submitCancellationRequest(
-    String bookingId,
-    String reason,
-  ) async {
+  /// Submit a single-week skip request for a weekly schedule occurrence.
+  Future<void> submitSkipRequest({
+    required String scheduleId,
+    required DateTime skipDate,
+    required String reason,
+  }) async {
     await client.rpc(
       'teacher_cancel_request',
-      params: {'p_booking_id': bookingId, 'p_reason': reason},
+      params: {
+        'p_schedule_id': scheduleId,
+        'p_skip_date': _isoDate(skipDate),
+        'p_reason': reason,
+      },
     );
+  }
+
+  /// Approve or reject a single-week skip exception.
+  Future<void> decideException(String exceptionId, bool approved) async {
+    await client.rpc(
+      'admin_decide_exception',
+      params: {'p_exception_id': exceptionId, 'p_approved': approved},
+    );
+  }
+
+  /// Admin permanently cancels a weekly recurring schedule.
+  Future<void> cancelWeeklySchedule(String scheduleId) async {
+    await client.rpc(
+      'admin_cancel_weekly_schedule',
+      params: {'p_schedule_id': scheduleId},
+    );
+  }
+
+  /// Fetch all active weekly schedules (admin: all; teacher: own).
+  Future<List<WeeklyScheduleInfo>> fetchWeeklySchedules() async {
+    final rows = await client.rpc('fetch_teacher_weekly_schedules');
+    return (rows as List)
+        .map((e) => WeeklyScheduleInfo.fromMap(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  /// Fetch schedule exceptions (admin only). status: 'pending', 'approved', 'rejected'.
+  Future<List<ScheduleExceptionInfo>> fetchScheduleExceptions(String? status) async {
+    final rows = await client.rpc(
+      'fetch_schedule_exceptions',
+      params: status == null ? {} : {'p_status': status},
+    );
+    return (rows as List)
+        .map((e) => ScheduleExceptionInfo.fromMap(Map<String, dynamic>.from(e)))
+        .toList();
   }
 
   Future<void> decideRequest(String requestId, bool approved) async {
@@ -2023,11 +2190,16 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   List<RoomRequestInfo> _requests = [];
   List<SlotAvailability> _todaySlots = [];
   List<EventInfo> _events = [];
+  List<WeeklyScheduleInfo> _weeklySchedules = [];
+  List<ScheduleExceptionInfo> _scheduleExceptions = [];
+  String _adminDayFilter = 'all';
 
   Map<String, UserProfile> get _userMap => {for (final u in _users) u.id: u};
   int get _unreadCount => _notifications.where((n) => !n.isRead).length;
   List<RoomRequestInfo> get _pendingRequests =>
       _requests.where((r) => r.status == 'pending').toList();
+  List<ScheduleExceptionInfo> get _pendingExceptions =>
+      _scheduleExceptions.where((e) => e.status == 'pending').toList();
   List<BookingInfo> get _activeBookings => _bookings
       .where(
         (b) => [
@@ -2122,6 +2294,18 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         table: 'events',
         callback: (_) => _loadAll(silent: true),
       )
+      ..onPostgresChanges(
+        event: PostgresChangeEvent.all,
+        schema: 'public',
+        table: 'weekly_teacher_schedules',
+        callback: (_) => _loadAll(silent: true),
+      )
+      ..onPostgresChanges(
+        event: PostgresChangeEvent.all,
+        schema: 'public',
+        table: 'weekly_schedule_exceptions',
+        callback: (_) => _loadAll(silent: true),
+      )
       ..subscribe();
   }
 
@@ -2144,6 +2328,12 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
           ? await _repo.fetchRequests(_role, userMap)
           : <RoomRequestInfo>[];
       final events = await _repo.fetchEvents();
+      final weeklySchedules = _role == UniRole.teacher || _role == UniRole.admin
+          ? await _repo.fetchWeeklySchedules()
+          : <WeeklyScheduleInfo>[];
+      final scheduleExceptions = _role == UniRole.teacher || _role == UniRole.admin
+          ? await _repo.fetchScheduleExceptions(null)
+          : <ScheduleExceptionInfo>[];
       final List<SlotAvailability> todaySlots;
       if (rooms.isNotEmpty) {
         final todaySlotsList = await Future.wait(
@@ -2164,6 +2354,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         _requests = requests;
         _events = events;
         _todaySlots = todaySlots;
+        _weeklySchedules = weeklySchedules;
+        _scheduleExceptions = scheduleExceptions;
         _error = null;
         _loading = false;
       });
@@ -2298,8 +2490,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             'Approval Panel',
             iconData: Icons.fact_check_rounded,
             inactiveIconData: Icons.fact_check_outlined,
-            badge: _pendingRequests.isNotEmpty
-                ? _pendingRequests.length.toString()
+            badge: _pendingExceptions.isNotEmpty
+                ? _pendingExceptions.length.toString()
                 : null,
           ),
           const NavEntry('admin-events', '📅', 'Events', iconData: Icons.event_rounded, inactiveIconData: Icons.event_outlined),
@@ -3818,16 +4010,15 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     );
   }
 
-  BookingInfo? _latestUpcomingClass() {
-    final upcoming = _bookings.where((b) => _bookingIsUpcoming(b)).toList();
-    if (upcoming.isEmpty) return null;
-    upcoming.sort((a, b) {
-      final aTime = _bookingDateTime(a, a.startTime);
-      final bTime = _bookingDateTime(b, b.startTime);
-      if (aTime == null || bTime == null) return 0;
-      return aTime.compareTo(bTime);
+  WeeklyScheduleInfo? _latestUpcomingWeeklySchedule() {
+    final active = _weeklySchedules.where((s) => s.status == 'active').toList();
+    if (active.isEmpty) return null;
+    active.sort((a, b) {
+      int cmp = a.nextDate.compareTo(b.nextDate);
+      if (cmp != 0) return cmp;
+      return a.startTime.compareTo(b.startTime);
     });
-    return upcoming.first;
+    return active.first;
   }
 
   Widget _teacherDashboard() {
@@ -3847,9 +4038,9 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     final dateStr = '${weekdays[now.weekday - 1]}, ${months[now.month - 1]} ${now.day}, ${now.year}';
 
-    final nextClass = _latestUpcomingClass();
-    final ownRequests = _requests.length;
-    final activeAssigned = _bookings.where((b) => (b.status == 'active' || b.status == 'confirmed') && _bookingIsUpcoming(b)).length;
+    final nextClass = _latestUpcomingWeeklySchedule();
+    final ownRequests = _scheduleExceptions.length;
+    final activeAssigned = _weeklySchedules.where((s) => s.status == 'active').length;
 
     // Upcoming events preview (next 2 events)
     final upcomingEvents = _events.where((e) {
@@ -4016,8 +4207,9 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     );
   }
 
-  Widget _teacherNextClassCard(BookingInfo booking) {
-    final cancellable = booking.canRequestTeacherCancellation;
+  Widget _teacherNextClassCard(WeeklyScheduleInfo schedule) {
+    final hasPendingSkip = _scheduleExceptions.any((e) => e.scheduleId == schedule.id && e.skipDate == _isoDate(schedule.nextDate) && e.status == 'pending');
+    final cancellable = schedule.status == 'active' && !hasPendingSkip;
     return Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
@@ -4057,18 +4249,18 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      booking.roomName,
+                      schedule.roomName,
                       style: GoogleFonts.plusJakartaSans(fontSize: 18, fontWeight: FontWeight.w800, color: AppPalette.text),
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '📍 ${booking.roomLocation}',
+                      '📍 ${schedule.roomLocation}',
                       style: _body(size: 13, color: AppPalette.text2),
                     ),
                   ],
                 ),
               ),
-              _statusFromText(booking.status),
+              _statusFromText(hasPendingSkip ? 'cancellation_pending' : schedule.status),
             ],
           ),
           const SizedBox(height: 18),
@@ -4081,9 +4273,9 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             ),
             child: Row(
               children: [
-                Expanded(child: _nextClassInfoItem(Icons.calendar_today_outlined, booking.displayDate)),
+                Expanded(child: _nextClassInfoItem(Icons.calendar_today_outlined, 'Every ${schedule.dayName} (Next: ${schedule.nextDateDisplay})')),
                 Container(width: 1, height: 20, color: AppPalette.border, margin: const EdgeInsets.symmetric(horizontal: 10)),
-                Expanded(child: _nextClassInfoItem(Icons.schedule_outlined, booking.timeRange)),
+                Expanded(child: _nextClassInfoItem(Icons.schedule_outlined, schedule.timeSlot)),
               ],
             ),
           ),
@@ -4092,20 +4284,20 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                '🧰 ${booking.facilitiesText}',
+                '🧰 Weekly Schedule',
                 style: _body(size: 11, color: AppPalette.text3),
               ),
               cancellable
                   ? _actionButton(
-                      'Request Release',
-                      AppPalette.danger,
-                      () => _showTeacherRequestDialog(booking),
+                      'Request Skip',
+                      AppPalette.warn,
+                      () => _showTeacherSkipDialog(schedule),
                     )
                   : Text(
-                      booking.status == 'cancellation_pending'
-                          ? 'Release Pending Approval'
-                          : 'Confirmed assignment',
-                      style: _body(size: 12, color: booking.status == 'cancellation_pending' ? AppPalette.warn : AppPalette.accent3, weight: FontWeight.bold),
+                      hasPendingSkip
+                          ? 'Skip Pending Approval'
+                          : 'Active assignment',
+                      style: _body(size: 12, color: hasPendingSkip ? AppPalette.warn : AppPalette.accent3, weight: FontWeight.bold),
                     ),
             ],
           ),
@@ -4211,41 +4403,32 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     );
   }
 
-  List<BookingInfo> _filteredTeacherBookings() {
-    List<BookingInfo> list = _bookings;
-    // Date filter
-    if (_teacherDateFilter != null) {
-      final dateStr = _isoDate(_teacherDateFilter!);
-      list = list.where((b) => b.date == dateStr).toList();
-    }
+  List<WeeklyScheduleInfo> _filteredTeacherSchedules() {
+    List<WeeklyScheduleInfo> list = _weeklySchedules;
     // Building filter
     if (_teacherBuildingFilter != 'All') {
       final query = _teacherBuildingFilter.toLowerCase().trim();
       if (query == 'other') {
-        list = list.where((b) => !b.roomBuilding.toLowerCase().contains('rkb') && !b.roomBuilding.toLowerCase().contains('rab')).toList();
+        list = list.where((s) => !s.roomLocation.toLowerCase().contains('rkb') && !s.roomLocation.toLowerCase().contains('rab')).toList();
       } else {
-        list = list.where((b) => b.roomBuilding.toLowerCase().contains(query)).toList();
+        list = list.where((s) => s.roomLocation.toLowerCase().contains(query)).toList();
       }
     }
     // Status filter
     if (_teacherStatusFilter != 'All') {
-      switch (_teacherStatusFilter) {
-        case 'Upcoming':
-          list = list.where(_bookingIsUpcoming).toList();
-          break;
-        case 'Completed':
-          list = list.where(_bookingIsCompleted).toList();
-          break;
-        case 'Cancelled':
-          list = list.where(_bookingIsCancelled).toList();
-          break;
-      }
+      final queryStatus = _teacherStatusFilter.toLowerCase();
+      list = list.where((s) => s.status.toLowerCase() == queryStatus).toList();
+    }
+    // Date filter
+    if (_teacherDateFilter != null) {
+      final dow = _teacherDateFilter!.weekday % 7;
+      list = list.where((s) => s.dayOfWeek == dow).toList();
     }
     return list;
   }
 
   Widget _teacherAssignedRoomsPage() {
-    final filtered = _filteredTeacherBookings();
+    final filtered = _filteredTeacherSchedules();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -4303,7 +4486,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                     child: SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
                       child: Row(
-                        children: ['All', 'Upcoming', 'Completed', 'Cancelled'].map((status) {
+                        children: ['All', 'Active', 'Cancelled'].map((status) {
                           final isSelected = _teacherStatusFilter == status;
                           return Padding(
                             padding: const EdgeInsets.only(right: 6),
@@ -4384,21 +4567,109 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         ),
         const SizedBox(height: 20),
 
-        // Bookings List
+        // Schedules List
         filtered.isEmpty
             ? _emptyState(
-                'No assigned rooms match filters',
-                'Change your building, status, or date filters to find assigned classes.',
+                'No assigned weekly schedules match filters',
+                'Change your building, status, or date filters to find assigned weekly schedules.',
               )
             : ListView.builder(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 itemCount: filtered.length,
                 itemBuilder: (context, index) {
-                  return _teacherAssignedBookingCard(filtered[index]);
+                  return _teacherAssignedScheduleCard(filtered[index]);
                 },
               ),
       ],
+    );
+  }
+
+  Widget _teacherAssignedScheduleCard(WeeklyScheduleInfo schedule) {
+    final hasPendingSkip = _scheduleExceptions.any((e) => e.scheduleId == schedule.id && e.skipDate == _isoDate(schedule.nextDate) && e.status == 'pending');
+    final isCancelled = schedule.status == 'cancelled';
+    final cancellable = schedule.status == 'active' && !hasPendingSkip;
+    final displayStatus = hasPendingSkip ? 'cancellation_pending' : schedule.status;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: _SurfaceCard(
+        padding: const EdgeInsets.all(18),
+        borderColor: hasPendingSkip
+            ? AppPalette.warn.withOpacity(0.35)
+            : AppPalette.border,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 46,
+                  height: 46,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    gradient: AppPalette.mainGradient,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: const Text('🏫', style: TextStyle(fontSize: 22)),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _heading(schedule.roomName, size: 16),
+                      const SizedBox(height: 4),
+                      Text(
+                        '📍 ${schedule.roomLocation}',
+                        style: _body(size: 12, color: AppPalette.text2),
+                      ),
+                    ],
+                  ),
+                ),
+                _statusFromText(displayStatus),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 16,
+              runSpacing: 8,
+              children: [
+                Text(
+                  '📅 Every ${schedule.dayName} (Next: ${schedule.nextDateDisplay})',
+                  style: _body(size: 12, color: AppPalette.text2),
+                ),
+                Text(
+                  '🕓 ${schedule.timeSlot}',
+                  style: _body(size: 12, color: AppPalette.text2),
+                ),
+                Text(
+                  '🧰 Weekly Schedule',
+                  style: _body(size: 12, color: AppPalette.text2),
+                ),
+              ],
+            ),
+            if (!isCancelled) ...[
+              const SizedBox(height: 14),
+              Align(
+                alignment: Alignment.centerRight,
+                child: cancellable
+                    ? _actionButton(
+                        'Request Skip',
+                        AppPalette.warn,
+                        () => _showTeacherSkipDialog(schedule),
+                      )
+                    : _plain(
+                        hasPendingSkip
+                            ? 'Skip Pending Admin Approval'
+                            : 'No action available',
+                      ),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 
@@ -4572,14 +4843,14 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       children: [
         _pageHeader(
           'Booking Management',
-          'View your admin-assigned room bookings and request cancellation through Admin approval workflow',
+          'View your admin-assigned weekly schedules and request single-week skips through Admin approval workflow',
         ),
-        _bookings.isEmpty
+        _weeklySchedules.isEmpty
             ? _emptyState(
-                'No assigned bookings found',
-                'Admin-assigned teacher room bookings will appear here.',
+                'No assigned weekly schedules found',
+                'Admin-assigned teacher weekly schedules will appear here.',
               )
-            : _bookingTable(_bookings, teacherActions: true),
+            : _weeklyScheduleTable(_weeklySchedules, teacherActions: true),
       ],
     );
   }
@@ -4589,17 +4860,198 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _pageHeader(
-          'Cancellation Requests',
-          'Track requests submitted to Admin for approval',
+          'Skip Requests History',
+          'Track single-week skip requests submitted to Admin for approval',
         ),
-        _requests.isEmpty
+        _scheduleExceptions.isEmpty
             ? _emptyState(
-                'No requests submitted',
-                'Submit a cancellation request from Booking Management.',
+                'No skip requests submitted',
+                'Submit a skip request from Booking Management.',
               )
-            : Column(children: _requests.map(_cancelItem).toList()),
+            : Column(children: _scheduleExceptions.map(_exceptionCancelItem).toList()),
       ],
     );
+  }
+
+  Widget _weeklyScheduleTable(
+    List<WeeklyScheduleInfo> schedules, {
+    required bool teacherActions,
+  }) {
+    return _tableCard(
+      headers: const ['Room', 'Weekly Schedule', 'Next Occurrence', 'Status', 'Action'],
+      flexes: const [2, 2, 2, 1, 1],
+      rows: schedules.map((s) {
+        final nextOccurrenceDisplay = s.nextDateDisplay;
+        final hasPendingSkip = _scheduleExceptions.any((e) => e.scheduleId == s.id && e.skipDate == _isoDate(s.nextDate) && e.status == 'pending');
+        
+        return [
+          _twoLine(s.roomName, s.roomLocation),
+          _twoLine('Every ${s.dayName}', s.timeSlot),
+          _plain(nextOccurrenceDisplay),
+          _statusFromText(hasPendingSkip ? 'cancellation_pending' : s.status),
+          teacherActions
+              ? (s.status == 'active' && !hasPendingSkip
+                  ? _actionButton(
+                      'Request Skip',
+                      AppPalette.warn,
+                      () => _showTeacherSkipDialog(s),
+                    )
+                  : _plain(hasPendingSkip ? 'Skip Pending' : '—'))
+              : _plain('—'),
+        ];
+      }).toList(),
+    );
+  }
+
+  Widget _exceptionCancelItem(ScheduleExceptionInfo exception) {
+    final color = exception.status == 'approved'
+        ? AppPalette.accent3
+        : exception.status == 'rejected'
+            ? AppPalette.danger
+            : AppPalette.warn;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: _SurfaceCard(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                exception.status == 'approved'
+                    ? '✅'
+                    : exception.status == 'rejected'
+                        ? '❌'
+                        : '🕐',
+                style: const TextStyle(fontSize: 20),
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${exception.roomName} — ${_dateDisplay(_isoDate(exception.createdAt))}',
+                    style: _body(size: 14, weight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Every ${exception.dayName} (Skip Date: ${exception.skipDateDisplay}) • ${exception.timeSlot}',
+                    style: _body(
+                      size: 12,
+                      color: AppPalette.accent3,
+                      weight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    exception.reason,
+                    style: _body(size: 12, color: AppPalette.text2),
+                  ),
+                ],
+              ),
+            ),
+            _statusPill(_statusLabel(exception.status), color),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showTeacherSkipDialog(WeeklyScheduleInfo schedule) async {
+    final controller = TextEditingController(
+      text: 'Academic schedule changed / class skipped for this week.',
+    );
+    DateTime selectedSkipDate = schedule.nextDate;
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => AlertDialog(
+          backgroundColor: AppPalette.surface,
+          title: Text(
+            'Request Weekly Skip',
+            style: _body(size: 18, weight: FontWeight.w800),
+          ),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'This will request to skip ONLY one specific week\'s slot. Future weeks remain scheduled.',
+                  style: _body(
+                    size: 13,
+                    color: AppPalette.warn,
+                    weight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  '${schedule.roomName}\nEvery ${schedule.dayName} • ${schedule.timeSlot}\nLocation: ${schedule.roomLocation}',
+                  style: _body(color: AppPalette.text2),
+                ),
+                const SizedBox(height: 14),
+                _fieldLabel('Select Date to Skip'),
+                InkWell(
+                  onTap: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: selectedSkipDate,
+                      firstDate: DateTime.now(),
+                      lastDate: DateTime.now().add(const Duration(days: 365)),
+                      selectableDayPredicate: (date) => date.weekday % 7 == schedule.dayOfWeek,
+                      builder: (context, child) => Theme(
+                        data: ThemeData.dark().copyWith(
+                          colorScheme: const ColorScheme.dark(
+                            primary: AppPalette.accent,
+                            surface: AppPalette.surface,
+                          ),
+                        ),
+                        child: child!,
+                      ),
+                    );
+                    if (picked != null) {
+                      setModalState(() {
+                        selectedSkipDate = picked;
+                      });
+                    }
+                  },
+                  child: _fakeInput(
+                    'Skip Date: ${_isoDate(selectedSkipDate)} (${schedule.dayName})',
+                  ),
+                ),
+                const SizedBox(height: 14),
+                _textInput(controller, 'Reason'),
+              ],
+            ),
+          ),
+          actions: [
+            _outlineButton('Close', () => Navigator.pop(context)),
+            _gradientButton('Send Request', () {
+              Navigator.pop(context);
+              _runAction(
+                () => _repo.submitSkipRequest(
+                  scheduleId: schedule.id,
+                  skipDate: selectedSkipDate,
+                  reason: controller.text.trim(),
+                ),
+                '✅ Skip request sent to Admin',
+              );
+            }),
+          ],
+        ),
+      ),
+    );
+    controller.dispose();
   }
 
   Widget _adminDashboard() {
@@ -4736,11 +5188,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 _adminStatCard(
                   icon: Icons.pending_actions_rounded,
                   iconColor: AppPalette.warn,
-                  value: '${_pendingRequests.length}',
+                  value: '${_pendingExceptions.length}',
                   label: 'Pending Approvals',
-                  sub: _pendingRequests.isEmpty ? 'All clear' : 'Needs review',
-                  subColor: _pendingRequests.isEmpty ? AppPalette.accent3 : AppPalette.warn,
-                  highlight: _pendingRequests.isNotEmpty,
+                  sub: _pendingExceptions.isEmpty ? 'All clear' : 'Needs review',
+                  subColor: _pendingExceptions.isEmpty ? AppPalette.accent3 : AppPalette.warn,
+                  highlight: _pendingExceptions.isNotEmpty,
                 ),
               ],
             );
@@ -4786,8 +5238,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                       _quickActionCard(
                         icon: Icons.fact_check_rounded,
                         label: 'Approval Panel',
-                        color: _pendingRequests.isNotEmpty ? AppPalette.warn : AppPalette.accent3,
-                        badge: _pendingRequests.isNotEmpty ? '${_pendingRequests.length}' : null,
+                        color: _pendingExceptions.isNotEmpty ? AppPalette.warn : AppPalette.accent3,
+                        badge: _pendingExceptions.isNotEmpty ? '${_pendingExceptions.length}' : null,
                         onTap: () => _navigate('admin-approval'),
                       ),
                       _quickActionCard(
@@ -5436,30 +5888,94 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       children: [
         _pageHeader(
           'Approval Panel',
-          'Review cancellation requests from teachers',
+          'Review single-week skip requests from teachers',
         ),
-        _pendingRequests.isEmpty
+        _pendingExceptions.isEmpty
             ? _emptyState(
                 'No pending approvals',
-                'Teacher cancellation requests will appear here.',
+                'Teacher weekly skip requests will appear here.',
               )
-            : Column(children: _pendingRequests.map(_approvalItem).toList()),
+            : Column(children: _pendingExceptions.map(_exceptionApprovalItem).toList()),
       ],
     );
   }
 
+  Widget _exceptionApprovalItem(ScheduleExceptionInfo exception) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: _SurfaceCard(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        child: Wrap(
+          spacing: 16,
+          runSpacing: 12,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: AppPalette.warn.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Text('🏫', style: TextStyle(fontSize: 20)),
+            ),
+            SizedBox(
+              width: 540,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${exception.roomName} — requested by ${exception.teacherName}',
+                    style: _body(size: 14, weight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Every ${exception.dayName} (Skip Date: ${exception.skipDateDisplay}) • ${exception.timeSlot}',
+                    style: _body(
+                      size: 12,
+                      color: AppPalette.accent3,
+                      weight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    exception.reason,
+                    style: _body(size: 12, color: AppPalette.text2),
+                  ),
+                ],
+              ),
+            ),
+            _actionButton(
+              '✅ Approve',
+              AppPalette.accent3,
+              () => _runAction(
+                () => _repo.decideException(exception.id, true),
+                '✅ Approved! Room slot skipped for this week.',
+              ),
+            ),
+            _actionButton(
+              '✕ Reject',
+              AppPalette.danger,
+              () => _runAction(
+                () => _repo.decideException(exception.id, false),
+                '✕ Request rejected. Teacher slot remains active.',
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _adminMonitor() {
-    final bookings = _filteredAdminTeacherBookings();
-    final now = DateTime.now();
+    final schedules = _filteredAdminTeacherSchedules();
 
     // Compute counts for summary bar
-    int confirmedCount = 0, activeCount = 0, completedCount = 0, cancelledCount = 0;
-    for (final b in bookings) {
-      final s = _bookingCurrentStatus(b);
-      if (s == 'confirmed') confirmedCount++;
-      else if (s == 'active') activeCount++;
-      else if (s == 'completed') completedCount++;
-      else if (s == 'cancelled') cancelledCount++;
+    int activeCount = 0, cancelledCount = 0;
+    for (final s in schedules) {
+      if (s.status == 'active') activeCount++;
+      else if (s.status == 'cancelled') cancelledCount++;
     }
 
     return Column(
@@ -5507,7 +6023,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(color: AppPalette.accent.withOpacity(0.30)),
                 ),
-                child: Text('${bookings.length} booking${bookings.length == 1 ? '' : 's'}',
+                child: Text('${schedules.length} schedule${schedules.length == 1 ? '' : 's'}',
                   style: _body(size: 12, color: AppPalette.accent, weight: FontWeight.w700)),
               ),
             ],
@@ -5515,16 +6031,12 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         ),
 
         // ── Summary Chips ─────────────────────────────────────────────
-        if (bookings.isNotEmpty) ...[
+        if (schedules.isNotEmpty) ...[
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
               children: [
-                _monitorChip('Confirmed', confirmedCount, AppPalette.accent),
-                const SizedBox(width: 8),
-                _monitorChip('Active', activeCount, AppPalette.accent3),
-                const SizedBox(width: 8),
-                _monitorChip('Completed', completedCount, AppPalette.text2),
+                _monitorChip('Active', activeCount, AppPalette.accent),
                 const SizedBox(width: 8),
                 _monitorChip('Cancelled', cancelledCount, AppPalette.danger),
               ],
@@ -5537,10 +6049,10 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         _adminBookingFilters(),
         const SizedBox(height: 16),
 
-        // ── Booking Cards ─────────────────────────────────────────────
-        bookings.isEmpty
-            ? _emptyState('No teacher room bookings found', 'Assign a teacher from Room Management or clear filters.')
-            : _adminBookingCards(bookings),
+        // ── Weekly Schedule Cards ─────────────────────────────────────
+        schedules.isEmpty
+            ? _emptyState('No teacher weekly schedules found', 'Assign a teacher from Room Management or clear filters.')
+            : _adminBookingCards(schedules),
       ],
     );
   }
@@ -5564,31 +6076,19 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     );
   }
 
-  Widget _adminBookingCards(List<BookingInfo> bookings) {
+  Widget _adminBookingCards(List<WeeklyScheduleInfo> schedules) {
     return Column(
-      children: bookings.asMap().entries.map((e) {
-        final b = e.value;
-        final statusText = _bookingCurrentStatus(b);
-        final isUpcoming = _bookingIsUpcoming(b);
+      children: schedules.asMap().entries.map((e) {
+        final s = e.value;
+        final statusText = s.status;
         final isActive = statusText == 'active';
 
-        final statusColor = statusText == 'cancelled'
+        final statusColor = !isActive
             ? AppPalette.danger
-            : statusText == 'completed'
-                ? AppPalette.text2
-                : statusText == 'active'
-                    ? AppPalette.accent3
-                    : AppPalette.accent; // confirmed
+            : AppPalette.accent; // active
 
-        final statusIcon = statusText == 'cancelled'
-            ? '✕'
-            : statusText == 'completed'
-                ? '●'
-                : statusText == 'active'
-                    ? '▶'
-                    : '●';
-
-        final canCancel = isUpcoming || isActive;
+        final statusIcon = !isActive ? '✕' : '●';
+        final canCancel = isActive;
 
         return Padding(
           padding: const EdgeInsets.only(bottom: 10),
@@ -5598,15 +6098,13 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               borderRadius: BorderRadius.circular(16),
               border: Border.all(
                 color: isActive
-                    ? AppPalette.accent3.withOpacity(0.30)
-                    : statusText == 'cancelled'
-                        ? AppPalette.danger.withOpacity(0.15)
-                        : AppPalette.border,
+                    ? AppPalette.accent.withOpacity(0.30)
+                    : AppPalette.danger.withOpacity(0.15),
                 width: isActive ? 1.5 : 1,
               ),
               boxShadow: [
                 BoxShadow(
-                  color: isActive ? AppPalette.accent3.withOpacity(0.06) : Colors.black.withOpacity(0.08),
+                  color: isActive ? AppPalette.accent.withOpacity(0.06) : Colors.black.withOpacity(0.08),
                   blurRadius: 12, offset: const Offset(0, 4),
                 ),
               ],
@@ -5619,15 +6117,15 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   Row(
                     children: [
                       // Avatar
-                      _avatar(_initials(b.userName), size: 40, radius: 11),
+                      _avatar(_initials(s.teacherName), size: 40, radius: 11),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(b.userName, style: _body(size: 14, weight: FontWeight.w700), overflow: TextOverflow.ellipsis),
+                            Text(s.teacherName, style: _body(size: 14, weight: FontWeight.w700), overflow: TextOverflow.ellipsis),
                             const SizedBox(height: 2),
-                            Text(b.roomName, style: _body(size: 12, color: AppPalette.accent), overflow: TextOverflow.ellipsis),
+                            Text(s.roomName, style: _body(size: 12, color: AppPalette.accent), overflow: TextOverflow.ellipsis),
                           ],
                         ),
                       ),
@@ -5640,7 +6138,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                           border: Border.all(color: statusColor.withOpacity(0.30)),
                         ),
                         child: Text(
-                          '$statusIcon ${_statusLabel(statusText)}',
+                          '$statusIcon ${isActive ? "Active" : "Cancelled"}',
                           style: _body(size: 11, color: statusColor, weight: FontWeight.w700),
                         ),
                       ),
@@ -5656,11 +6154,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                     ),
                     child: Row(
                       children: [
-                        _bookingDetailItem(Icons.meeting_room_outlined, b.roomLocation),
+                        _bookingDetailItem(Icons.meeting_room_outlined, s.roomLocation),
                         _bookingDetailDivider(),
-                        _bookingDetailItem(Icons.calendar_today_outlined, b.displayDate),
+                        _bookingDetailItem(Icons.calendar_today_outlined, '${s.fullDayLabel} (Next: ${s.nextDateDisplay})'),
                         _bookingDetailDivider(),
-                        _bookingDetailItem(Icons.schedule_outlined, b.timeRange),
+                        _bookingDetailItem(Icons.schedule_outlined, s.timeSlot),
                       ],
                     ),
                   ),
@@ -5671,8 +6169,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                       alignment: Alignment.centerRight,
                       child: InkWell(
                         onTap: () => _runAction(
-                          () => _repo.cancelBooking(b.id),
-                          '✅ Booking cancelled by Admin',
+                          () => _repo.cancelWeeklySchedule(s.id),
+                          '✅ Weekly Schedule cancelled by Admin',
                         ),
                         borderRadius: BorderRadius.circular(8),
                         child: Container(
@@ -5687,7 +6185,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                             children: [
                               Icon(Icons.cancel_outlined, color: AppPalette.danger, size: 15),
                               const SizedBox(width: 6),
-                              Text('Cancel Booking', style: _body(size: 12, color: AppPalette.danger, weight: FontWeight.w700)),
+                              Text('Cancel Schedule', style: _body(size: 12, color: AppPalette.danger, weight: FontWeight.w700)),
                             ],
                           ),
                         ),
@@ -5784,15 +6282,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               ],
             )
           else if (teacherActions)
-            teacherCancellable
-                ? _actionButton(
-                    'Request Cancel',
-                    AppPalette.danger,
-                    () => _showTeacherRequestDialog(b),
-                  )
-                : _plain(
-                    b.status == 'cancellation_pending' ? 'Awaiting Admin' : '—',
-                  )
+            _plain('—')
           else
             _plain('—'),
         ];
@@ -5800,20 +6290,21 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     );
   }
 
-  List<BookingInfo> _filteredAdminTeacherBookings() {
-    return _bookings.where((b) {
-      if (!b.isTeacherRoomBooking) return false;
-      if (_adminTeacherFilter != 'all' &&
-          b.userId != _adminTeacherFilter &&
-          b.teacherId != _adminTeacherFilter)
+  List<WeeklyScheduleInfo> _filteredAdminTeacherSchedules() {
+    return _weeklySchedules.where((s) {
+      if (_adminTeacherFilter != 'all' && s.teacherId != _adminTeacherFilter) {
         return false;
-      if (_adminRoomFilter != 'all' && b.roomId != _adminRoomFilter)
+      }
+      if (_adminRoomFilter != 'all' && s.roomId != _adminRoomFilter) {
         return false;
-      if (_adminDateFilter != null && b.date != _isoDate(_adminDateFilter!))
-        return false;
+      }
+      if (_adminDayFilter != 'all') {
+        final dow = int.tryParse(_adminDayFilter);
+        if (dow != null && s.dayOfWeek != dow) return false;
+      }
       if (_adminSlotFilter != 'all') {
         final label = fixedTeacherSlots[_adminSlotFilter] ?? '';
-        if (b.timeRange != label) return false;
+        if (s.timeSlot != label) return false;
       }
       return true;
     }).toList();
@@ -5821,7 +6312,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
 
   Widget _adminBookingFilters() {
     final hasFilters = _adminTeacherFilter != 'all' || _adminRoomFilter != 'all'
-        || _adminSlotFilter != 'all' || _adminDateFilter != null;
+        || _adminSlotFilter != 'all' || _adminDayFilter != 'all';
 
     return Container(
       decoration: BoxDecoration(
@@ -5853,7 +6344,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                       _adminTeacherFilter = 'all';
                       _adminRoomFilter = 'all';
                       _adminSlotFilter = 'all';
-                      _adminDateFilter = null;
+                      _adminDayFilter = 'all';
                     }),
                     borderRadius: BorderRadius.circular(8),
                     child: Container(
@@ -5918,47 +6409,25 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   ),
                   width: 200,
                 ),
-                // Date filter
+                // Day of Week filter
                 _filterField(
-                  label: '📅 Date',
-                  child: InkWell(
-                    onTap: () async {
-                      final picked = await showDatePicker(
-                        context: context,
-                        initialDate: _adminDateFilter ?? DateTime.now(),
-                        firstDate: DateTime.now().subtract(const Duration(days: 180)),
-                        lastDate: DateTime.now().add(const Duration(days: 365)),
-                        builder: (context, child) => Theme(
-                          data: ThemeData.dark().copyWith(colorScheme: const ColorScheme.dark(primary: AppPalette.accent, surface: AppPalette.surface)),
-                          child: child!,
-                        ),
-                      );
-                      if (picked != null) setState(() => _adminDateFilter = picked);
-                    },
-                    child: Container(
-                      height: 50,
-                      padding: const EdgeInsets.symmetric(horizontal: 14),
-                      decoration: BoxDecoration(
-                        color: _adminDateFilter != null ? AppPalette.accent.withOpacity(0.10) : AppPalette.surface2,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: _adminDateFilter != null ? AppPalette.accent.withOpacity(0.40) : AppPalette.border),
-                      ),
-                      child: Row(children: [
-                        Icon(Icons.calendar_today_rounded, size: 15, color: _adminDateFilter != null ? AppPalette.accent : AppPalette.text2),
-                        const SizedBox(width: 8),
-                        Text(
-                          _adminDateFilter == null ? 'All Dates' : _isoDate(_adminDateFilter!),
-                          style: _body(size: 13, color: _adminDateFilter != null ? AppPalette.accent : AppPalette.text2, weight: FontWeight.w600),
-                        ),
-                        if (_adminDateFilter != null) ...[
-                          const Spacer(),
-                          GestureDetector(
-                            onTap: () => setState(() => _adminDateFilter = null),
-                            child: Icon(Icons.close_rounded, size: 15, color: AppPalette.text2),
-                          ),
-                        ],
-                      ]),
-                    ),
+                  label: '📅 Day of Week',
+                  child: DropdownButtonFormField<String>(
+                    value: _adminDayFilter,
+                    dropdownColor: AppPalette.surface2,
+                    decoration: _inputDecoration('All Days'),
+                    isExpanded: true,
+                    items: [
+                      const DropdownMenuItem(value: 'all', child: Text('All Days')),
+                      const DropdownMenuItem(value: '0', child: Text('Sunday')),
+                      const DropdownMenuItem(value: '1', child: Text('Monday')),
+                      const DropdownMenuItem(value: '2', child: Text('Tuesday')),
+                      const DropdownMenuItem(value: '3', child: Text('Wednesday')),
+                      const DropdownMenuItem(value: '4', child: Text('Thursday')),
+                      const DropdownMenuItem(value: '5', child: Text('Friday')),
+                      const DropdownMenuItem(value: '6', child: Text('Saturday')),
+                    ],
+                    onChanged: (v) => setState(() => _adminDayFilter = v ?? 'all'),
                   ),
                   width: 180,
                 ),
@@ -6369,59 +6838,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     ),
   );
 
-  Future<void> _showTeacherRequestDialog(BookingInfo booking) async {
-    final controller = TextEditingController(
-      text: 'Academic schedule changed / class cancellation.',
-    );
-    await showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: AppPalette.surface,
-        title: Text(
-          'Request Cancellation',
-          style: _body(size: 18, weight: FontWeight.w800),
-        ),
-        content: SizedBox(
-          width: 420,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'This will not release the room immediately. It will be sent to Admin for approval.',
-                style: _body(
-                  size: 13,
-                  color: AppPalette.warn,
-                  weight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                '${booking.roomName}\n${booking.displayDate} • ${booking.timeRange}\n${booking.facilitiesText}',
-                style: _body(color: AppPalette.text2),
-              ),
-              const SizedBox(height: 14),
-              _textInput(controller, 'Reason'),
-            ],
-          ),
-        ),
-        actions: [
-          _outlineButton('Close', () => Navigator.pop(context)),
-          _gradientButton('Send Request', () {
-            Navigator.pop(context);
-            _runAction(
-              () => _repo.submitCancellationRequest(
-                booking.id,
-                controller.text.trim(),
-              ),
-              '✅ Cancellation request sent to Admin',
-            );
-          }),
-        ],
-      ),
-    );
-    controller.dispose();
-  }
+
 
   Future<void> _showCreateGroupDialog() async {
     final name = TextEditingController();
@@ -7550,7 +7967,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                           });
                       },
                       child: _fakeInput(
-                        'Assigned date: ${_isoDate(selectedDate)}',
+                        'Assigned Date: ${_isoDate(selectedDate)} (Recurs every ${_dowName(selectedDate.weekday % 7)})',
                       ),
                     ),
                     const SizedBox(height: 12),
@@ -7566,7 +7983,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                     slotPicker(),
                     const SizedBox(height: 10),
                     Text(
-                      'Conflict rule: same room + same date + same slot cannot be assigned twice. Student-booked slots are protected.',
+                      'Conflict rule: same room + same day-of-week + same slot cannot be assigned twice. Student-booked slots on the next occurrence are protected.',
                       style: _body(size: 11, color: AppPalette.warn),
                     ),
                   ],
@@ -8344,91 +8761,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     );
   }
 
-  Widget _teacherAssignedBookingCard(BookingInfo booking) {
-    final isCompleted = _bookingIsCompleted(booking);
-    final cancellable = booking.canRequestTeacherCancellation && !isCompleted;
-    final displayStatus = _bookingCurrentStatus(booking);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: _SurfaceCard(
-        padding: const EdgeInsets.all(18),
-        borderColor: booking.status == 'cancellation_pending'
-            ? AppPalette.warn.withOpacity(0.35)
-            : AppPalette.border,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: 46,
-                  height: 46,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    gradient: AppPalette.mainGradient,
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: const Text('🏫', style: TextStyle(fontSize: 22)),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _heading(booking.roomName, size: 16),
-                      const SizedBox(height: 4),
-                      Text(
-                        '📍 ${booking.roomLocation}',
-                        style: _body(size: 12, color: AppPalette.text2),
-                      ),
-                    ],
-                  ),
-                ),
-                _statusFromText(displayStatus),
-              ],
-            ),
-            const SizedBox(height: 14),
-            Wrap(
-              spacing: 16,
-              runSpacing: 8,
-              children: [
-                Text(
-                  '📅 ${booking.displayDate}',
-                  style: _body(size: 12, color: AppPalette.text2),
-                ),
-                Text(
-                  '🕓 ${booking.timeRange}',
-                  style: _body(size: 12, color: AppPalette.text2),
-                ),
-                Text(
-                  '🧰 ${booking.facilitiesText}',
-                  style: _body(size: 12, color: AppPalette.text2),
-                ),
-              ],
-            ),
-            if (!isCompleted) ...[
-              const SizedBox(height: 14),
-              Align(
-                alignment: Alignment.centerRight,
-                child: cancellable
-                    ? _actionButton(
-                        'Request Cancellation',
-                        AppPalette.danger,
-                        () => _showTeacherRequestDialog(booking),
-                      )
-                    : _plain(
-                        booking.status == 'cancellation_pending'
-                            ? 'Cancellation Pending Admin Approval'
-                            : 'No action available',
-                      ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
+
 
   Widget _groupCard(StudyGroupInfo group) {
     final isOpen = !group.isFull && group.status == 'active';

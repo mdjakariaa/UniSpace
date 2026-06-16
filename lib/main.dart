@@ -1960,7 +1960,7 @@ class UniSpaceRepository {
   Future<List<ScheduleExceptionInfo>> fetchScheduleExceptions(String? status) async {
     final rows = await client.rpc(
       'fetch_schedule_exceptions',
-      params: status == null ? {} : {'p_status': status},
+      params: <String, dynamic>{'p_status': status},
     );
     return (rows as List)
         .map((e) => ScheduleExceptionInfo.fromMap(Map<String, dynamic>.from(e)))
@@ -2213,6 +2213,185 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   List<UserProfile> get _teachers => _users
       .where((u) => u.role == UniRole.teacher && u.status == 'active')
       .toList();
+
+  DateTime _dateOnly(DateTime value) =>
+      DateTime(value.year, value.month, value.day);
+
+  TimeOfDay? _parseScheduleTime(String value) {
+    final text = value.trim().toUpperCase();
+    if (text.isEmpty) return null;
+
+    final match = RegExp(r'(\d{1,2})(?::(\d{2}))?').firstMatch(text);
+    if (match == null) return null;
+
+    var hour = int.tryParse(match.group(1) ?? '');
+    final minute = int.tryParse(match.group(2) ?? '0') ?? 0;
+    if (hour == null) return null;
+
+    final hasAm = text.contains('AM');
+    final hasPm = text.contains('PM');
+    if (hasAm || hasPm) {
+      hour = hour % 12;
+      if (hasPm) hour += 12;
+    }
+
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+    return TimeOfDay(hour: hour, minute: minute);
+  }
+
+  DateTime _scheduleDateTime(
+    DateTime date,
+    String time, {
+    TimeOfDay? fallback,
+    int fallbackHourOffset = 0,
+  }) {
+    final parsed = _parseScheduleTime(time);
+    final effective = parsed ??
+        (fallback == null
+            ? const TimeOfDay(hour: 0, minute: 0)
+            : TimeOfDay(
+                hour: (fallback.hour + fallbackHourOffset).clamp(0, 23).toInt(),
+                minute: fallback.minute,
+              ));
+    return DateTime(date.year, date.month, date.day, effective.hour, effective.minute);
+  }
+
+  DateTime _scheduleOccurrenceEnd(
+    WeeklyScheduleInfo schedule,
+    DateTime date,
+  ) {
+    final end = _parseScheduleTime(schedule.endTime);
+    if (end == null) {
+      return DateTime(date.year, date.month, date.day, 23, 59, 59, 999);
+    }
+    return DateTime(date.year, date.month, date.day, end.hour, end.minute);
+  }
+
+  DateTime _nextOccurrenceForSchedule(
+    WeeklyScheduleInfo schedule, {
+    DateTime? from,
+  }) {
+    final now = from ?? DateTime.now();
+    final today = _dateOnly(now);
+    final todayDow = now.weekday % 7;
+    final daysAhead = (schedule.dayOfWeek - todayDow + 7) % 7;
+    var occurrence = today.add(Duration(days: daysAhead));
+
+    if (daysAhead == 0) {
+      final start = _parseScheduleTime(schedule.startTime);
+      final end = _scheduleDateTime(
+        occurrence,
+        schedule.endTime,
+        fallback: start,
+        fallbackHourOffset: 1,
+      );
+      if (!now.isBefore(end)) {
+        occurrence = occurrence.add(const Duration(days: 7));
+      }
+    }
+
+    return occurrence;
+  }
+
+  ScheduleExceptionInfo? _scheduleExceptionForDate(
+    WeeklyScheduleInfo schedule,
+    DateTime date,
+    String status,
+  ) {
+    final targetDate = _isoDate(date);
+    for (final exception in _scheduleExceptions) {
+      if (exception.scheduleId == schedule.id &&
+          exception.skipDate == targetDate &&
+          exception.status == status) {
+        return exception;
+      }
+    }
+    return null;
+  }
+
+  bool _scheduleExceptionStillApplies(
+    WeeklyScheduleInfo schedule,
+    ScheduleExceptionInfo exception, {
+    DateTime? now,
+  }) {
+    final skipDate = DateTime.tryParse(exception.skipDate);
+    if (skipDate == null) return false;
+    final end = _scheduleOccurrenceEnd(schedule, skipDate);
+    return (now ?? DateTime.now()).isBefore(end);
+  }
+
+  ScheduleExceptionInfo? _activeApprovedSkipException(
+    WeeklyScheduleInfo schedule, {
+    DateTime? now,
+  }) {
+    final currentTime = now ?? DateTime.now();
+    final matches = _scheduleExceptions.where((exception) {
+      return exception.scheduleId == schedule.id &&
+          exception.status == 'approved' &&
+          _scheduleExceptionStillApplies(
+            schedule,
+            exception,
+            now: currentTime,
+          );
+    }).toList();
+    if (matches.isEmpty) return null;
+
+    matches.sort((a, b) {
+      final aDate = DateTime.tryParse(a.skipDate);
+      final bDate = DateTime.tryParse(b.skipDate);
+      if (aDate == null && bDate == null) return 0;
+      if (aDate == null) return 1;
+      if (bDate == null) return -1;
+      return aDate.compareTo(bDate);
+    });
+    return matches.first;
+  }
+
+  DateTime _nextActiveOccurrenceForSchedule(WeeklyScheduleInfo schedule) {
+    var occurrence = _nextOccurrenceForSchedule(schedule);
+    for (var i = 0; i < 52; i++) {
+      final approved = _scheduleExceptionForDate(schedule, occurrence, 'approved');
+      if (approved == null ||
+          !_scheduleExceptionStillApplies(schedule, approved)) {
+        return occurrence;
+      }
+      occurrence = occurrence.add(const Duration(days: 7));
+    }
+    return occurrence;
+  }
+
+  DateTime _statusDateForSchedule(
+    WeeklyScheduleInfo schedule, {
+    bool useTeacherDateFilter = true,
+  }) {
+    if (useTeacherDateFilter && _teacherDateFilter != null) {
+      return _dateOnly(_teacherDateFilter!);
+    }
+
+    final activeApprovedSkip = _activeApprovedSkipException(schedule);
+    if (activeApprovedSkip != null) {
+      final skipDate = DateTime.tryParse(activeApprovedSkip.skipDate);
+      if (skipDate != null) return _dateOnly(skipDate);
+    }
+
+    return _nextOccurrenceForSchedule(schedule);
+  }
+
+  String _displayStatusForSchedule(
+    WeeklyScheduleInfo schedule, {
+    DateTime? occurrenceDate,
+  }) {
+    final date = occurrenceDate ?? _statusDateForSchedule(schedule);
+    final approved = _scheduleExceptionForDate(schedule, date, 'approved');
+    if (approved != null &&
+        _scheduleExceptionStillApplies(schedule, approved)) {
+      return 'cancelled';
+    }
+    if (_scheduleExceptionForDate(schedule, date, 'pending') != null) {
+      return 'cancellation_pending';
+    }
+    return schedule.status;
+  }
 
   @override
   void initState() {
@@ -4014,9 +4193,16 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     final active = _weeklySchedules.where((s) => s.status == 'active').toList();
     if (active.isEmpty) return null;
     active.sort((a, b) {
-      int cmp = a.nextDate.compareTo(b.nextDate);
+      final createdCmp = b.createdAt.compareTo(a.createdAt);
+      if (createdCmp != 0) return createdCmp;
+
+      final aDate = _nextActiveOccurrenceForSchedule(a);
+      final bDate = _nextActiveOccurrenceForSchedule(b);
+      int cmp = aDate.compareTo(bDate);
       if (cmp != 0) return cmp;
-      return a.startTime.compareTo(b.startTime);
+      final aStart = _scheduleDateTime(aDate, a.startTime);
+      final bStart = _scheduleDateTime(bDate, b.startTime);
+      return aStart.compareTo(bStart);
     });
     return active.first;
   }
@@ -4039,8 +4225,13 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     final dateStr = '${weekdays[now.weekday - 1]}, ${months[now.month - 1]} ${now.day}, ${now.year}';
 
     final nextClass = _latestUpcomingWeeklySchedule();
-    final ownRequests = _scheduleExceptions.length;
-    final activeAssigned = _weeklySchedules.where((s) => s.status == 'active').length;
+    final ownRequests = _requests.length + _scheduleExceptions.length;
+    final activeAssigned = _weeklySchedules
+        .where((s) => _displayStatusForSchedule(
+              s,
+              occurrenceDate: _statusDateForSchedule(s, useTeacherDateFilter: false),
+            ) == 'active')
+        .length;
 
     // Upcoming events preview (next 2 events)
     final upcomingEvents = _events.where((e) {
@@ -4208,8 +4399,10 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   }
 
   Widget _teacherNextClassCard(WeeklyScheduleInfo schedule) {
-    final hasPendingSkip = _scheduleExceptions.any((e) => e.scheduleId == schedule.id && e.skipDate == _isoDate(schedule.nextDate) && e.status == 'pending');
-    final cancellable = schedule.status == 'active' && !hasPendingSkip;
+    final occurrenceDate = _nextActiveOccurrenceForSchedule(schedule);
+    final displayStatus = _displayStatusForSchedule(schedule, occurrenceDate: occurrenceDate);
+    final hasPendingSkip = displayStatus == 'cancellation_pending';
+    final cancellable = displayStatus == 'active';
     return Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
@@ -4260,7 +4453,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   ],
                 ),
               ),
-              _statusFromText(hasPendingSkip ? 'cancellation_pending' : schedule.status),
+              _statusFromText(displayStatus),
             ],
           ),
           const SizedBox(height: 18),
@@ -4273,7 +4466,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             ),
             child: Row(
               children: [
-                Expanded(child: _nextClassInfoItem(Icons.calendar_today_outlined, 'Every ${schedule.dayName} (Next: ${schedule.nextDateDisplay})')),
+                Expanded(child: _nextClassInfoItem(Icons.calendar_today_outlined, 'Every ${schedule.dayName} (Next: ${_dateDisplay(_isoDate(occurrenceDate))})')),
                 Container(width: 1, height: 20, color: AppPalette.border, margin: const EdgeInsets.symmetric(horizontal: 10)),
                 Expanded(child: _nextClassInfoItem(Icons.schedule_outlined, schedule.timeSlot)),
               ],
@@ -4417,7 +4610,9 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     // Status filter
     if (_teacherStatusFilter != 'All') {
       final queryStatus = _teacherStatusFilter.toLowerCase();
-      list = list.where((s) => s.status.toLowerCase() == queryStatus).toList();
+      list = list
+          .where((s) => _displayStatusForSchedule(s).toLowerCase() == queryStatus)
+          .toList();
     }
     // Date filter
     if (_teacherDateFilter != null) {
@@ -4586,10 +4781,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   }
 
   Widget _teacherAssignedScheduleCard(WeeklyScheduleInfo schedule) {
-    final hasPendingSkip = _scheduleExceptions.any((e) => e.scheduleId == schedule.id && e.skipDate == _isoDate(schedule.nextDate) && e.status == 'pending');
-    final isCancelled = schedule.status == 'cancelled';
-    final cancellable = schedule.status == 'active' && !hasPendingSkip;
-    final displayStatus = hasPendingSkip ? 'cancellation_pending' : schedule.status;
+    final occurrenceDate = _statusDateForSchedule(schedule);
+    final displayStatus = _displayStatusForSchedule(schedule, occurrenceDate: occurrenceDate);
+    final hasPendingSkip = displayStatus == 'cancellation_pending';
+    final isCancelled = displayStatus == 'cancelled';
+    final cancellable = displayStatus == 'active';
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
@@ -4637,7 +4833,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               runSpacing: 8,
               children: [
                 Text(
-                  '📅 Every ${schedule.dayName} (Next: ${schedule.nextDateDisplay})',
+                  '📅 Every ${schedule.dayName} (Next: ${_dateDisplay(_isoDate(occurrenceDate))})',
                   style: _body(size: 12, color: AppPalette.text2),
                 ),
                 Text(
@@ -4881,16 +5077,20 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       headers: const ['Room', 'Weekly Schedule', 'Next Occurrence', 'Status', 'Action'],
       flexes: const [2, 2, 2, 1, 1],
       rows: schedules.map((s) {
-        final nextOccurrenceDisplay = s.nextDateDisplay;
-        final hasPendingSkip = _scheduleExceptions.any((e) => e.scheduleId == s.id && e.skipDate == _isoDate(s.nextDate) && e.status == 'pending');
+        final occurrenceDate = teacherActions
+            ? _nextActiveOccurrenceForSchedule(s)
+            : _statusDateForSchedule(s);
+        final nextOccurrenceDisplay = _dateDisplay(_isoDate(occurrenceDate));
+        final displayStatus = _displayStatusForSchedule(s, occurrenceDate: occurrenceDate);
+        final hasPendingSkip = displayStatus == 'cancellation_pending';
         
         return [
           _twoLine(s.roomName, s.roomLocation),
           _twoLine('Every ${s.dayName}', s.timeSlot),
           _plain(nextOccurrenceDisplay),
-          _statusFromText(hasPendingSkip ? 'cancellation_pending' : s.status),
+          _statusFromText(displayStatus),
           teacherActions
-              ? (s.status == 'active' && !hasPendingSkip
+              ? (displayStatus == 'active'
                   ? _actionButton(
                       'Request Skip',
                       AppPalette.warn,
@@ -4969,7 +5169,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     final controller = TextEditingController(
       text: 'Academic schedule changed / class skipped for this week.',
     );
-    DateTime selectedSkipDate = schedule.nextDate;
+    DateTime selectedSkipDate = _nextActiveOccurrenceForSchedule(schedule);
 
     await showDialog<void>(
       context: context,

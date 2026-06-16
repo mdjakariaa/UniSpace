@@ -652,6 +652,7 @@ DECLARE
   v_exception  public.weekly_schedule_exceptions%ROWTYPE;
   v_schedule   public.weekly_teacher_schedules%ROWTYPE;
   v_room_name  TEXT;
+  v_room_building TEXT;
   v_day_name   TEXT;
 BEGIN
   IF v_user IS NULL THEN
@@ -673,7 +674,9 @@ BEGIN
   END IF;
 
   SELECT * INTO v_schedule FROM public.weekly_teacher_schedules WHERE id = v_exception.schedule_id;
-  SELECT name INTO v_room_name FROM public.rooms WHERE id = v_schedule.room_id;
+  SELECT name, building INTO v_room_name, v_room_building
+  FROM public.rooms
+  WHERE id = v_schedule.room_id;
 
   v_day_name := CASE v_schedule.day_of_week
     WHEN 0 THEN 'Sunday'   WHEN 1 THEN 'Monday'    WHEN 2 THEN 'Tuesday'
@@ -690,7 +693,8 @@ BEGIN
     VALUES (
       v_exception.requested_by,
       'Skip Request Approved',
-      'Admin approved your skip request for ' || COALESCE(v_room_name, 'the room') ||
+      'Admin approved your skip request for ' ||
+        trim(COALESCE(v_room_name, 'the room') || COALESCE(' ' || NULLIF(v_room_building, ''), '')) ||
         ' (' || v_day_name || ' ' || COALESCE(v_schedule.time_slot, '') || ') on ' || v_exception.skip_date || '.',
       'request_approved',
       jsonb_build_object('exception_id', p_exception_id, 'skip_date', v_exception.skip_date)
@@ -704,7 +708,8 @@ BEGIN
     VALUES (
       v_exception.requested_by,
       'Skip Request Rejected',
-      'Admin rejected your skip request for ' || COALESCE(v_room_name, 'the room') ||
+      'Admin rejected your skip request for ' ||
+        trim(COALESCE(v_room_name, 'the room') || COALESCE(' ' || NULLIF(v_room_building, ''), '')) ||
         ' (' || v_day_name || ' ' || COALESCE(v_schedule.time_slot, '') || ') on ' || v_exception.skip_date || '. Your slot remains active.',
       'request_rejected',
       jsonb_build_object('exception_id', p_exception_id, 'skip_date', v_exception.skip_date)

@@ -1310,6 +1310,22 @@ class ScheduleExceptionInfo {
   String get skipDateDisplay => _dateDisplay(skipDate);
 }
 
+class _AdminActivityItem {
+  final String title;
+  final String subtitle;
+  final String status;
+  final String initials;
+  final DateTime timestamp;
+
+  const _AdminActivityItem({
+    required this.title,
+    required this.subtitle,
+    required this.status,
+    required this.initials,
+    required this.timestamp,
+  });
+}
+
 String _dowName(int dow) {
   const names = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
   return (dow >= 0 && dow < 7) ? names[dow] : 'Day';
@@ -2088,10 +2104,10 @@ class UniSpaceRepository {
   }
 
   Future<void> deleteUser(String userId) async {
-    // Delete user's bookings first, then profile
-    await client.from('bookings').delete().eq('user_id', userId);
-    await client.from('notifications').delete().eq('user_id', userId);
-    await client.from('profiles').delete().eq('id', userId);
+    await client.rpc(
+      'admin_delete_user_activity',
+      params: {'p_user_id': userId},
+    );
   }
 
   Future<void> markNotificationRead(String id) async {
@@ -2175,6 +2191,9 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   String _adminTeacherFilter = 'all';
   String _adminRoomFilter = 'all';
   String _adminSlotFilter = 'all';
+  String _adminBuildingFilter = 'all';
+  String _adminManagedRoomFilter = 'all';
+  String _adminManagedBuildingFilter = 'all';
   DateTime? _adminDateFilter;
 
   // Teacher filter variables
@@ -2213,6 +2232,33 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   List<UserProfile> get _teachers => _users
       .where((u) => u.role == UniRole.teacher && u.status == 'active')
       .toList();
+
+  RoomInfo? _roomById(String roomId) {
+    for (final room in _rooms) {
+      if (room.id == roomId) return room;
+    }
+    return null;
+  }
+
+  List<String> get _buildingFilterOptions {
+    final values = SplayTreeSet<String>(
+      (a, b) => a.toLowerCase().compareTo(b.toLowerCase()),
+    );
+    values.addAll(const ['RAB', 'RKB']);
+    for (final room in _rooms) {
+      final building = room.building.trim();
+      if (building.isNotEmpty) values.add(building);
+    }
+    return values.toList();
+  }
+
+  bool _matchesBuildingFilter(String building, String filter) {
+    if (filter == 'all') return true;
+    final normalizedBuilding = building.toLowerCase().trim();
+    final normalizedFilter = filter.toLowerCase().trim();
+    if (normalizedBuilding == normalizedFilter) return true;
+    return normalizedBuilding.contains(normalizedFilter);
+  }
 
   DateTime _dateOnly(DateTime value) =>
       DateTime(value.year, value.month, value.day);
@@ -5637,7 +5683,170 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     );
   }
 
+  List<_AdminActivityItem> _adminActivityItems() {
+    final items = <_AdminActivityItem>[];
+
+    for (final booking in _bookings) {
+      final bookingDate = DateTime.tryParse(booking.date) ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      items.add(_AdminActivityItem(
+        title: booking.isTeacherRoomBooking
+            ? 'Teacher booking: ${booking.userName}'
+            : 'Seat booking: ${booking.userName}',
+        subtitle:
+            '${booking.roomName} - ${booking.displayDate} - ${booking.timeRange}',
+        status: booking.status,
+        initials: _initials(booking.userName),
+        timestamp: _scheduleDateTime(bookingDate, booking.startTime),
+      ));
+    }
+
+    for (final schedule in _weeklySchedules) {
+      items.add(_AdminActivityItem(
+        title: 'Weekly schedule: ${schedule.teacherName}',
+        subtitle:
+            '${schedule.roomName} - Every ${schedule.dayName} - ${schedule.timeSlot}',
+        status: schedule.status,
+        initials: _initials(schedule.teacherName),
+        timestamp: schedule.createdAt,
+      ));
+    }
+
+    for (final exception in _scheduleExceptions) {
+      items.add(_AdminActivityItem(
+        title: 'Skip request: ${exception.teacherName}',
+        subtitle:
+            '${exception.roomName} - ${exception.skipDateDisplay} - ${exception.timeSlot}',
+        status: exception.status,
+        initials: _initials(exception.teacherName),
+        timestamp: exception.createdAt,
+      ));
+    }
+
+    items.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    return items.take(6).toList();
+  }
+
+  Color _activityStatusColor(String status) {
+    if (status == 'cancelled' || status == 'rejected') {
+      return AppPalette.danger;
+    }
+    if (status == 'pending' || status == 'cancellation_pending') {
+      return AppPalette.warn;
+    }
+    if (status == 'approved' ||
+        status == 'completed' ||
+        status == 'released') {
+      return AppPalette.accent;
+    }
+    return AppPalette.accent3;
+  }
+
   Widget _adminRecentActivity() {
+    final recent = _adminActivityItems();
+    return _SurfaceCard(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _heading('Recent Activity', size: 14),
+              InkWell(
+                onTap: () => _navigate('admin-monitor'),
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  child: Text(
+                    'View all',
+                    style: _body(
+                      size: 12,
+                      color: AppPalette.accent,
+                      weight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          if (recent.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              child: Center(
+                child: Text(
+                  'No recent activity yet',
+                  style: _body(size: 13, color: AppPalette.text2),
+                ),
+              ),
+            )
+          else
+            ...recent.asMap().entries.map((entry) {
+              final index = entry.key;
+              final activity = entry.value;
+              final statusColor = _activityStatusColor(activity.status);
+              return Container(
+                padding: const EdgeInsets.symmetric(vertical: 11),
+                decoration: BoxDecoration(
+                  border: index < recent.length - 1
+                      ? const Border(
+                          bottom: BorderSide(color: AppPalette.border),
+                        )
+                      : null,
+                ),
+                child: Row(
+                  children: [
+                    _avatar(activity.initials, size: 34, radius: 9),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            activity.title,
+                            style: _body(size: 13, weight: FontWeight.w700),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            activity.subtitle,
+                            style: _body(size: 11, color: AppPalette.text2),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 9,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: statusColor.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        _statusLabel(activity.status),
+                        style: _body(
+                          size: 10,
+                          color: statusColor,
+                          weight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+        ],
+      ),
+    );
+  }
+
+  // ignore: unused_element
+  Widget _legacyAdminRecentActivity() {
     final recent = _bookings.where((b) => b.isTeacherRoomBooking).take(6).toList();
     return _SurfaceCard(
       padding: const EdgeInsets.all(20),
@@ -5749,7 +5958,121 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     );
   }
 
+  List<RoomInfo> _filteredAdminRooms() {
+    return _rooms.where((room) {
+      if (_adminManagedRoomFilter != 'all' &&
+          room.id != _adminManagedRoomFilter) {
+        return false;
+      }
+      if (!_matchesBuildingFilter(
+        room.building,
+        _adminManagedBuildingFilter,
+      )) {
+        return false;
+      }
+      return true;
+    }).toList();
+  }
+
+  Widget _adminRoomManagementFilters() {
+    final hasFilters = _adminManagedRoomFilter != 'all' ||
+        _adminManagedBuildingFilter != 'all';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppPalette.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppPalette.border),
+      ),
+      child: Wrap(
+        spacing: 12,
+        runSpacing: 12,
+        crossAxisAlignment: WrapCrossAlignment.end,
+        children: [
+          _filterField(
+            label: 'Room',
+            child: DropdownButtonFormField<String>(
+              value: _adminManagedRoomFilter,
+              dropdownColor: AppPalette.surface2,
+              decoration: _inputDecoration('All Rooms'),
+              isExpanded: true,
+              items: [
+                const DropdownMenuItem(
+                  value: 'all',
+                  child: Text('All Rooms'),
+                ),
+                ..._rooms.map(
+                  (room) => DropdownMenuItem(
+                    value: room.id,
+                    child: Text(room.name, overflow: TextOverflow.ellipsis),
+                  ),
+                ),
+              ],
+              onChanged: (value) => setState(
+                () => _adminManagedRoomFilter = value ?? 'all',
+              ),
+            ),
+            width: 220,
+          ),
+          _filterField(
+            label: 'Building',
+            child: DropdownButtonFormField<String>(
+              value: _adminManagedBuildingFilter,
+              dropdownColor: AppPalette.surface2,
+              decoration: _inputDecoration('All Buildings'),
+              isExpanded: true,
+              items: [
+                const DropdownMenuItem(
+                  value: 'all',
+                  child: Text('All Buildings'),
+                ),
+                ..._buildingFilterOptions.map(
+                  (building) => DropdownMenuItem(
+                    value: building,
+                    child: Text(building, overflow: TextOverflow.ellipsis),
+                  ),
+                ),
+              ],
+              onChanged: (value) => setState(
+                () => _adminManagedBuildingFilter = value ?? 'all',
+              ),
+            ),
+            width: 200,
+          ),
+          if (hasFilters)
+            InkWell(
+              onTap: () => setState(() {
+                _adminManagedRoomFilter = 'all';
+                _adminManagedBuildingFilter = 'all';
+              }),
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+                decoration: BoxDecoration(
+                  color: AppPalette.warn.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppPalette.warn.withOpacity(0.30)),
+                ),
+                child: Text(
+                  'Clear',
+                  style: _body(
+                    size: 12,
+                    color: AppPalette.warn,
+                    weight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _adminRooms() {
+    final filteredRooms = _filteredAdminRooms();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -5765,12 +6088,18 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
           ),
         ),
         const SizedBox(height: 16),
+        if (_rooms.isNotEmpty) _adminRoomManagementFilters(),
         _rooms.isEmpty
             ? _emptyState(
                 'No rooms found',
                 'Add rooms to start seat-based booking.',
               )
-            : _roomGrid(_rooms, adminMode: true),
+            : filteredRooms.isEmpty
+                ? _emptyState(
+                    'No rooms match these filters',
+                    'Clear filters or choose another room/building.',
+                  )
+                : _roomGrid(filteredRooms, adminMode: true),
       ],
     );
   }
@@ -6498,6 +6827,13 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       if (_adminRoomFilter != 'all' && s.roomId != _adminRoomFilter) {
         return false;
       }
+      if (_adminBuildingFilter != 'all') {
+        final room = _roomById(s.roomId);
+        if (room == null ||
+            !_matchesBuildingFilter(room.building, _adminBuildingFilter)) {
+          return false;
+        }
+      }
       if (_adminDayFilter != 'all') {
         final dow = int.tryParse(_adminDayFilter);
         if (dow != null && s.dayOfWeek != dow) return false;
@@ -6512,6 +6848,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
 
   Widget _adminBookingFilters() {
     final hasFilters = _adminTeacherFilter != 'all' || _adminRoomFilter != 'all'
+        || _adminBuildingFilter != 'all'
         || _adminSlotFilter != 'all' || _adminDayFilter != 'all';
 
     return Container(
@@ -6543,6 +6880,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                     onTap: () => setState(() {
                       _adminTeacherFilter = 'all';
                       _adminRoomFilter = 'all';
+                      _adminBuildingFilter = 'all';
                       _adminSlotFilter = 'all';
                       _adminDayFilter = 'all';
                     }),
@@ -6608,6 +6946,34 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                     onChanged: (v) => setState(() => _adminRoomFilter = v ?? 'all'),
                   ),
                   width: 200,
+                ),
+                // Building filter
+                _filterField(
+                  label: 'Building',
+                  child: DropdownButtonFormField<String>(
+                    value: _adminBuildingFilter,
+                    dropdownColor: AppPalette.surface2,
+                    decoration: _inputDecoration('All Buildings'),
+                    isExpanded: true,
+                    items: [
+                      const DropdownMenuItem(
+                        value: 'all',
+                        child: Text('All Buildings'),
+                      ),
+                      ..._buildingFilterOptions.map((building) =>
+                          DropdownMenuItem(
+                            value: building,
+                            child: Text(
+                              building,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          )),
+                    ],
+                    onChanged: (v) => setState(
+                      () => _adminBuildingFilter = v ?? 'all',
+                    ),
+                  ),
+                  width: 190,
                 ),
                 // Day of Week filter
                 _filterField(
@@ -8287,34 +8653,63 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   onChanged: (v) => setModalState(() => status = v ?? status),
                 ),
                 const SizedBox(height: 20),
-                // Delete User button
-                InkWell(
-                  onTap: () {
-                    Navigator.pop(context);
-                    _confirmDeleteUser(user);
-                  },
-                  borderRadius: BorderRadius.circular(10),
-                  child: Container(
+                if (user.role == UniRole.admin)
+                  Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: AppPalette.danger.withOpacity(0.10),
+                      color: AppPalette.warn.withOpacity(0.10),
                       borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: AppPalette.danger.withOpacity(0.30)),
+                      border:
+                          Border.all(color: AppPalette.warn.withOpacity(0.30)),
                     ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.delete_outline_rounded, color: AppPalette.danger, size: 18),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Delete User',
-                          style: _body(size: 13, color: AppPalette.danger, weight: FontWeight.w700),
+                    child: Text(
+                      'Admin accounts cannot be deleted from this screen.',
+                      style: _body(
+                        size: 12,
+                        color: AppPalette.warn,
+                        weight: FontWeight.w700,
+                      ),
+                    ),
+                  )
+                else
+                  InkWell(
+                    onTap: () {
+                      Navigator.pop(context);
+                      _confirmDeleteUser(user);
+                    },
+                    borderRadius: BorderRadius.circular(10),
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      decoration: BoxDecoration(
+                        color: AppPalette.danger.withOpacity(0.10),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: AppPalette.danger.withOpacity(0.30),
                         ),
-                      ],
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.delete_outline_rounded,
+                            color: AppPalette.danger,
+                            size: 18,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Delete User Activity',
+                            style: _body(
+                              size: 13,
+                              color: AppPalette.danger,
+                              weight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                ),
               ],
             ),
           ),

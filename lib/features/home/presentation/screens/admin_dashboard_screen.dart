@@ -117,16 +117,6 @@ class AdminDashboardScreen extends ConsumerWidget {
                   onTap: () => context.go('/admin/rooms'),
                 ).animate(delay: 600.ms).fadeIn().slideX(begin: -0.05),
 
-                const SizedBox(height: 12),
-
-                _ManagementTile(
-                  icon: Icons.approval_rounded,
-                  title: 'Approval Panel',
-                  subtitle: 'Review pending requests',
-                  color: AppColors.warning,
-                  onTap: () => context.go('/admin/approvals'),
-                ).animate(delay: 700.ms).fadeIn().slideX(begin: -0.05),
-
                 const SizedBox(height: 100),
               ],
             ),

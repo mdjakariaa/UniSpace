@@ -40,7 +40,6 @@ class _AppShellState extends ConsumerState<AppShell> {
           _NavItem(Icons.dashboard_rounded, 'Dashboard', '/admin'),
           _NavItem(Icons.people_rounded, 'Users', '/admin/users'),
           _NavItem(Icons.meeting_room_rounded, 'Rooms', '/admin/rooms'),
-          _NavItem(Icons.approval_rounded, 'Approvals', '/admin/approvals'),
           _NavItem(Icons.person_rounded, 'Profile', '/admin/profile'),
         ];
     }

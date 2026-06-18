@@ -15,9 +15,10 @@ Based on `Pasted text.txt`, this project was updated so room availability is no 
 - Admin-blocked teacher slots show as disabled/red and cannot be booked by students.
 - Admin cannot assign two teachers to the same room/date/slot.
 - Admin cannot assign a teacher to a slot that already has student bookings.
-- Teacher cancellation request sets booking status to `cancellation_pending` and keeps the slot blocked.
-- Admin approval cancels/releases the teacher booking and makes the slot available again.
-- Admin rejection restores the teacher booking to active and keeps the slot blocked.
+- Teacher cancellation immediately skips the selected weekly occurrence and notifies Admin.
+- Teacher Browse Rooms can book a full one-date room slot.
+- Teacher full-slot booking cancels existing student bookings in that slot and notifies affected students.
+- Teacher-booked date-specific slots stop blocking after the slot end time.
 - Student booking slip is generated after successful booking.
 - Student booking history includes a slip button.
 

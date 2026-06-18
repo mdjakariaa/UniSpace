@@ -24,15 +24,14 @@ Mapped against `UniSpace_Structure.pdf`:
 - Teacher
   - Teacher dashboard
   - Booking visibility
-  - Cancellation request submission through RPC `teacher_cancel_request`
-  - Cancellation request tracking
+  - Direct single-occurrence slot cancellation through RPC `teacher_cancel_request`
+  - Browse Rooms full-slot booking through RPC `teacher_book_room_slot`
   - Notifications
 
 - Admin
   - Admin dashboard analytics
   - User management with role/status edit
   - Room add/edit/delete
-  - Approval panel through RPC `admin_decide_request`
   - Booking monitor and admin cancellation
 
 - Backend/Database
@@ -42,7 +41,7 @@ Mapped against `UniSpace_Structure.pdf`:
   - Auth trigger profile creation
   - Realtime publication for live UI refresh
   - Atomic booking function
-  - Teacher-to-admin approval workflow functions
+  - Teacher direct cancellation and full-slot booking functions
 
 ## Admin + Teacher Room Assignment Checklist
 
@@ -53,8 +52,8 @@ Mapped against `UniSpace_Structure.pdf`:
 - [x] Backend rejects same room + same date + same exact slot conflict.
 - [x] Same room can be assigned to same/different teachers in different slots.
 - [x] Teacher Dashboard displays assigned rooms with room, location, facilities, date, slot, status, and cancellation action.
-- [x] Teacher cancellation creates a pending request and changes booking to `cancellation_pending`.
-- [x] Admin Approval Panel can approve/reject cancellation requests.
+- [x] Teacher cancellation immediately skips the selected weekly occurrence and notifies Admin.
+- [x] Teacher Browse Rooms can book a full room slot for one selected date.
 - [x] Admin Booking Monitor includes teacher, room, date, and slot filters.
 - [x] Student seat-based booking system remains unchanged.
 
@@ -68,8 +67,7 @@ Mapped against `UniSpace_Structure.pdf`:
 - [x] Admin cannot assign another teacher to the same room/date/slot.
 - [x] Admin cannot assign a teacher to a slot with existing student bookings.
 - [x] Teacher dashboard shows assigned room slots.
-- [x] Teacher cancellation request sets booking status to `cancellation_pending`.
-- [x] Admin approval releases/cancels the teacher booking.
-- [x] Admin rejection restores the teacher booking to active.
+- [x] Teacher cancellation immediately releases the selected occurrence.
+- [x] Teacher full-slot booking cancels existing student bookings and notifies affected students.
 - [x] Student booking slip generated and displayed after successful booking.
 - [x] Supabase Realtime listens to rooms, bookings, requests, notifications, profiles, and booking slips.

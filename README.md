@@ -14,8 +14,8 @@ A Flutter + Supabase group study room finder and seat booking system.
 - Student booking cancellation
 - Group study creation and join-by-code
 - Notifications
-- Teacher cancellation request workflow
-- Admin approval/rejection workflow
+- Teacher direct slot cancellation workflow
+- Teacher full-slot room booking workflow
 - Admin user management
 - Admin room add/edit/delete
 - Admin booking monitor
@@ -62,8 +62,9 @@ This version adds the requested Admin + Teacher workflow while keeping the exist
 - Admin can select one or multiple slots in the room add/edit dialog.
 - Supabase RPC prevents duplicate teacher assignment for the same room, date, and exact slot.
 - Teacher Dashboard now shows only that logged-in teacher’s assigned room bookings.
-- Teacher can request cancellation; the booking becomes `cancellation_pending` and is not released directly.
-- Admin Approval Panel shows the request and can approve or reject it.
+- Teacher can cancel a selected weekly occurrence directly; Admin is notified with teacher and slot details.
+- Teacher can browse rooms and book a full free or student-booked slot for one selected date.
+- Student bookings in a teacher-booked slot are cancelled automatically and affected students are notified.
 - Admin Booking Monitor includes filters for teacher, room, date, and time slot.
 - Realtime subscriptions refresh rooms, bookings, requests, notifications, and profiles.
 
@@ -85,7 +86,7 @@ The SQL is idempotent and safely extends the existing schema with:
 - `room_requests.teacher_id`
 - `room_requests.updated_at`
 - `admin_assign_teacher_room(...)` RPC
-- updated teacher cancellation and admin approval RPC logic
+- updated teacher cancellation and direct teacher full-slot booking RPC logic
 - conflict-prevention unique index for active teacher room slots
 
 
@@ -100,7 +101,8 @@ Key additions:
 - Admin-blocked slots are red/disabled for students and admin reassignment.
 - Student bookings are rejected when the slot is admin-blocked, full, or already booked by the same student.
 - Admin teacher assignment is rejected when the same room/date/slot is already blocked or has student bookings.
-- Teacher cancellation keeps the slot blocked as `cancellation_pending` until Admin approves/rejects.
+- Teacher cancellation immediately skips the selected occurrence and notifies Admin.
+- Teacher full-slot bookings block the selected room/date/slot for students and cancel existing student bookings in that slot.
 - A student booking slip is generated after successful booking and shown immediately.
 
 Before running this version, run the updated SQL file in Supabase SQL Editor:

@@ -17,7 +17,6 @@ import 'package:unispace/features/notifications/presentation/screens/notificatio
 import 'package:unispace/features/profile/presentation/screens/profile_screen.dart';
 import 'package:unispace/features/admin/presentation/screens/user_management_screen.dart';
 import 'package:unispace/features/admin/presentation/screens/room_management_screen.dart';
-import 'package:unispace/features/admin/presentation/screens/approval_panel_screen.dart';
 
 /// Application router with role-based navigation guards
 final routerProvider = Provider<GoRouter>((ref) {
@@ -141,10 +140,6 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: '/admin/rooms',
             builder: (context, state) => const RoomManagementScreen(),
-          ),
-          GoRoute(
-            path: '/admin/approvals',
-            builder: (context, state) => const ApprovalPanelScreen(),
           ),
           GoRoute(
             path: '/admin/profile',

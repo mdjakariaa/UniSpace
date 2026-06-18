@@ -1008,6 +1008,11 @@ class SlotAvailability {
       !isBlockedByAdmin &&
       !isFullyBooked &&
       (status == 'available' || status == 'partially_booked');
+  bool get teacherSelectable =>
+      !isBlockedByAdmin &&
+      (status == 'available' ||
+          status == 'partially_booked' ||
+          status == 'fully_booked');
   bool get adminSelectable => status == 'available';
 
   Color get statusColor {
@@ -1830,6 +1835,25 @@ class UniSpaceRepository {
     return fetchBookingSlip(bookingId.toString());
   }
 
+  Future<void> bookTeacherRoomSlot({
+    required String roomId,
+    required DateTime date,
+    required String startTime,
+    required String endTime,
+    required String purpose,
+  }) async {
+    await client.rpc(
+      'teacher_book_room_slot',
+      params: {
+        'p_room_id': roomId,
+        'p_date': _isoDate(date),
+        'p_start': startTime,
+        'p_end': endTime,
+        'p_purpose': purpose,
+      },
+    );
+  }
+
   Future<void> cancelBooking(String bookingId) async {
     await client.rpc('cancel_booking', params: {'p_booking_id': bookingId});
   }
@@ -1945,14 +1969,6 @@ class UniSpaceRepository {
         'p_skip_date': _isoDate(skipDate),
         'p_reason': reason,
       },
-    );
-  }
-
-  /// Approve or reject a single-week skip exception.
-  Future<void> decideException(String exceptionId, bool approved) async {
-    await client.rpc(
-      'admin_decide_exception',
-      params: {'p_exception_id': exceptionId, 'p_approved': approved},
     );
   }
 
@@ -2700,6 +2716,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         ];
       case UniRole.teacher:
         return [
+          const NavEntry('teacher-rooms', 'Rooms', 'Browse Rooms', iconData: Icons.meeting_room_rounded, inactiveIconData: Icons.meeting_room_outlined),
           const NavEntry('teacher-dashboard', '📊', 'Dashboard', iconData: Icons.dashboard_rounded, inactiveIconData: Icons.dashboard_outlined),
           const NavEntry('teacher-assigned-rooms', '🏫', 'Assigned Rooms', iconData: Icons.meeting_room_rounded, inactiveIconData: Icons.meeting_room_outlined),
           const NavEntry('teacher-events', '📅', 'Events', iconData: Icons.event_rounded, inactiveIconData: Icons.event_outlined),
@@ -2709,16 +2726,6 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
           const NavEntry('admin-dashboard', '📊', 'Dashboard', iconData: Icons.dashboard_rounded, inactiveIconData: Icons.dashboard_outlined),
           const NavEntry('admin-users', '👥', 'User Management', iconData: Icons.people_rounded, inactiveIconData: Icons.people_outline_rounded),
           const NavEntry('admin-rooms', '🚪', 'Room Management', iconData: Icons.meeting_room_rounded, inactiveIconData: Icons.meeting_room_outlined),
-          NavEntry(
-            'admin-approval',
-            '✅',
-            'Approval Panel',
-            iconData: Icons.fact_check_rounded,
-            inactiveIconData: Icons.fact_check_outlined,
-            badge: _pendingExceptions.isNotEmpty
-                ? _pendingExceptions.length.toString()
-                : null,
-          ),
           const NavEntry('admin-events', '📅', 'Events', iconData: Icons.event_rounded, inactiveIconData: Icons.event_outlined),
           const NavEntry('admin-monitor', '📡', 'Booking Monitor', iconData: Icons.monitor_heart_rounded, inactiveIconData: Icons.monitor_heart_outlined),
         ];
@@ -3060,6 +3067,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         return _profilePage();
       case 'teacher-dashboard':
         return _teacherDashboard();
+      case 'teacher-rooms':
+        return _roomsPage();
       case 'teacher-assigned-rooms':
         return _teacherAssignedRoomsPage();
       case 'teacher-events':
@@ -3074,8 +3083,6 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         return _adminUsers();
       case 'admin-rooms':
         return _adminRooms();
-      case 'admin-approval':
-        return _adminApproval();
       case 'admin-events':
         return _adminEventsPage();
       case 'admin-monitor':
@@ -3932,12 +3939,15 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
 
   Widget _roomsPage() {
     final filtered = _filterRooms(_rooms);
+    final isTeacher = _role == UniRole.teacher;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _pageHeader(
           'Browse Rooms',
-          'Find and book study rooms in real-time across campus',
+          isTeacher
+              ? 'Book full room slots for one selected date. Teacher bookings block all seats for students.'
+              : 'Find and book study rooms in real-time across campus',
         ),
         _chips(
           [
@@ -4085,6 +4095,18 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     final clampMinute = minute.clamp(0, 59);
 
     return DateTime(date.year, date.month, date.day, hour, clampMinute);
+  }
+
+  bool _slotHasEnded(DateTime date, SlotAvailability slot) {
+    final parts = slot.slotKey.split('|');
+    if (parts.length != 2) return false;
+    final endParts = parts[1].split(':');
+    if (endParts.length < 2) return false;
+    final hour = int.tryParse(endParts[0]);
+    final minute = int.tryParse(endParts[1]);
+    if (hour == null || minute == null) return false;
+    final end = DateTime(date.year, date.month, date.day, hour, minute);
+    return !DateTime.now().isBefore(end);
   }
 
   Widget _groupsPage() {
@@ -4534,7 +4556,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                     )
                   : Text(
                       hasPendingSkip
-                          ? 'Skip Pending Approval'
+                          ? 'Skipped for this date'
                           : 'Active assignment',
                       style: _body(size: 12, color: hasPendingSkip ? AppPalette.warn : AppPalette.accent3, weight: FontWeight.bold),
                     ),
@@ -4903,9 +4925,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                         () => _showTeacherSkipDialog(schedule),
                       )
                     : _plain(
-                        hasPendingSkip
-                            ? 'Skip Pending Admin Approval'
-                            : 'No action available',
+                        hasPendingSkip ? 'Skipped for this date' : 'No action available',
                       ),
               ),
             ],
@@ -5085,7 +5105,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       children: [
         _pageHeader(
           'Booking Management',
-          'View your admin-assigned weekly schedules and request single-week skips through Admin approval workflow',
+          'View your admin-assigned weekly schedules and cancel single-week slots directly',
         ),
         _weeklySchedules.isEmpty
             ? _emptyState(
@@ -5223,7 +5243,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         builder: (context, setModalState) => AlertDialog(
           backgroundColor: AppPalette.surface,
           title: Text(
-            'Request Weekly Skip',
+            'Cancel Weekly Slot',
             style: _body(size: 18, weight: FontWeight.w800),
           ),
           content: SizedBox(
@@ -5233,7 +5253,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'This will request to skip ONLY one specific week\'s slot. Future weeks remain scheduled.',
+                  'This will cancel only the selected week\'s slot immediately. Future weeks remain scheduled.',
                   style: _body(
                     size: 13,
                     color: AppPalette.warn,
@@ -5282,7 +5302,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
           ),
           actions: [
             _outlineButton('Close', () => Navigator.pop(context)),
-            _gradientButton('Send Request', () {
+            _gradientButton('Cancel Slot', () {
               Navigator.pop(context);
               _runAction(
                 () => _repo.submitSkipRequest(
@@ -5290,7 +5310,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   skipDate: selectedSkipDate,
                   reason: controller.text.trim(),
                 ),
-                '✅ Skip request sent to Admin',
+                'Slot cancelled. Admin has been notified.',
               );
             }),
           ],
@@ -5431,15 +5451,6 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   sub: '$bookingsThisWeek this week',
                   subColor: AppPalette.text2,
                 ),
-                _adminStatCard(
-                  icon: Icons.pending_actions_rounded,
-                  iconColor: AppPalette.warn,
-                  value: '${_pendingExceptions.length}',
-                  label: 'Pending Approvals',
-                  sub: _pendingExceptions.isEmpty ? 'All clear' : 'Needs review',
-                  subColor: _pendingExceptions.isEmpty ? AppPalette.accent3 : AppPalette.warn,
-                  highlight: _pendingExceptions.isNotEmpty,
-                ),
               ],
             );
           },
@@ -5480,13 +5491,6 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                         label: 'Room Management',
                         color: AppPalette.accent,
                         onTap: () => _navigate('admin-rooms'),
-                      ),
-                      _quickActionCard(
-                        icon: Icons.fact_check_rounded,
-                        label: 'Approval Panel',
-                        color: _pendingExceptions.isNotEmpty ? AppPalette.warn : AppPalette.accent3,
-                        badge: _pendingExceptions.isNotEmpty ? '${_pendingExceptions.length}' : null,
-                        onTap: () => _navigate('admin-approval'),
                       ),
                       _quickActionCard(
                         icon: Icons.monitor_heart_rounded,
@@ -6411,92 +6415,6 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     );
   }
 
-  Widget _adminApproval() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _pageHeader(
-          'Approval Panel',
-          'Review single-week skip requests from teachers',
-        ),
-        _pendingExceptions.isEmpty
-            ? _emptyState(
-                'No pending approvals',
-                'Teacher weekly skip requests will appear here.',
-              )
-            : Column(children: _pendingExceptions.map(_exceptionApprovalItem).toList()),
-      ],
-    );
-  }
-
-  Widget _exceptionApprovalItem(ScheduleExceptionInfo exception) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: _SurfaceCard(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-        child: Wrap(
-          spacing: 16,
-          runSpacing: 12,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: AppPalette.warn.withOpacity(0.12),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Text('🏫', style: TextStyle(fontSize: 20)),
-            ),
-            SizedBox(
-              width: 540,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '${exception.roomName} — requested by ${exception.teacherName}',
-                    style: _body(size: 14, weight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Every ${exception.dayName} (Skip Date: ${exception.skipDateDisplay}) • ${exception.timeSlot}',
-                    style: _body(
-                      size: 12,
-                      color: AppPalette.accent3,
-                      weight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    exception.reason,
-                    style: _body(size: 12, color: AppPalette.text2),
-                  ),
-                ],
-              ),
-            ),
-            _actionButton(
-              '✅ Approve',
-              AppPalette.accent3,
-              () => _runAction(
-                () => _repo.decideException(exception.id, true),
-                '✅ Approved! Room slot skipped for this week.',
-              ),
-            ),
-            _actionButton(
-              '✕ Reject',
-              AppPalette.danger,
-              () => _runAction(
-                () => _repo.decideException(exception.id, false),
-                '✕ Request rejected. Teacher slot remains active.',
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _adminMonitor() {
     final schedules = _filteredAdminTeacherSchedules();
 
@@ -7063,7 +6981,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   }
 
   Future<void> _openBooking(RoomInfo room) async {
-    if (_role != UniRole.student) return;
+    if (_role != UniRole.student && _role != UniRole.teacher) return;
+    final isTeacher = _role == UniRole.teacher;
     DateTime selectedDate = DateTime.now();
     String? selectedSlot;
     Future<List<SlotAvailability>> slotFuture = _repo.fetchSlotAvailability(
@@ -7103,7 +7022,9 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'Seat availability is calculated separately for this room, date and time slot.',
+                        isTeacher
+                            ? 'Book the full room slot for a selected date. Existing student bookings in that slot will be cancelled.'
+                            : 'Seat availability is calculated separately for this room, date and time slot.',
                         style: _body(size: 12, color: AppPalette.text2),
                       ),
                       const SizedBox(height: 16),
@@ -7118,7 +7039,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                             _miniInfo('Room Capacity', '${room.capacity}'),
                             _miniInfo(
                               'Availability',
-                              'Slot Based',
+                              isTeacher ? 'Full Slot' : 'Slot Based',
                               color: AppPalette.accent3,
                               small: true,
                             ),
@@ -7206,6 +7127,13 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                                     children: slots.map((slot) {
                                       final selected =
                                           selectedSlot == slot.slotKey;
+                                      final ended =
+                                          _slotHasEnded(selectedDate, slot);
+                                      final selectable =
+                                          !ended &&
+                                          (isTeacher
+                                              ? slot.teacherSelectable
+                                              : slot.studentSelectable);
                                       final width = twoCols
                                           ? (c.maxWidth - 10) / 2
                                           : c.maxWidth;
@@ -7215,7 +7143,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                                           slot,
                                           selected: selected,
                                           forAdmin: false,
-                                          onTap: slot.studentSelectable
+                                          onTap: selectable
                                               ? () => setModalState(
                                                   () => selectedSlot =
                                                       slot.slotKey,
@@ -7232,7 +7160,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                         },
                       ),
                       const SizedBox(height: 16),
-                      _fieldLabel('Purpose'),
+                      _fieldLabel(isTeacher ? 'Purpose / Class Details' : 'Purpose'),
                       _textInput(
                         purposeController,
                         'e.g. DSA group study, exam prep…',
@@ -7260,18 +7188,35 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                                 final parts = selectedSlot!.split('|');
                                 Navigator.of(context).pop();
                                 try {
-                                  final slip = await _repo.bookSeat(
-                                    roomId: room.id,
-                                    date: selectedDate,
-                                    startTime: parts[0],
-                                    endTime: parts[1],
-                                    purpose:
-                                        purposeController.text.trim().isEmpty
-                                        ? 'Study'
-                                        : purposeController.text.trim(),
-                                  );
-                                  await _loadAll(silent: true);
-                                  if (mounted) _showBookingSlip(slip);
+                                  final purpose =
+                                      purposeController.text.trim().isEmpty
+                                      ? (isTeacher
+                                            ? 'Teacher room booking'
+                                            : 'Study')
+                                      : purposeController.text.trim();
+                                  if (isTeacher) {
+                                    await _repo.bookTeacherRoomSlot(
+                                      roomId: room.id,
+                                      date: selectedDate,
+                                      startTime: parts[0],
+                                      endTime: parts[1],
+                                      purpose: purpose,
+                                    );
+                                    await _loadAll(silent: true);
+                                    _showToast(
+                                      'Room slot booked. Students in this slot were notified if cancelled.',
+                                    );
+                                  } else {
+                                    final slip = await _repo.bookSeat(
+                                      roomId: room.id,
+                                      date: selectedDate,
+                                      startTime: parts[0],
+                                      endTime: parts[1],
+                                      purpose: purpose,
+                                    );
+                                    await _loadAll(silent: true);
+                                    if (mounted) _showBookingSlip(slip);
+                                  }
                                 } catch (e) {
                                   _showToast('⚠️ ${_friendlyError(e)}');
                                 }

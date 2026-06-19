@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:unispace/core/constants/app_constants.dart';
 import 'package:unispace/features/auth/data/datasources/auth_remote_datasource.dart';
 import 'package:unispace/features/auth/data/repositories/auth_repository_impl.dart';
 import 'package:unispace/features/auth/domain/entities/app_user.dart';
@@ -28,17 +29,9 @@ class AuthState {
   final AppUser? user;
   final String? error;
 
-  const AuthState({
-    this.status = AuthStatus.initial,
-    this.user,
-    this.error,
-  });
+  const AuthState({this.status = AuthStatus.initial, this.user, this.error});
 
-  AuthState copyWith({
-    AuthStatus? status,
-    AppUser? user,
-    String? error,
-  }) {
+  AuthState copyWith({AuthStatus? status, AppUser? user, String? error}) {
     return AuthState(
       status: status ?? this.status,
       user: user ?? this.user,
@@ -69,16 +62,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
   }
 
-  Future<void> signIn({
-    required String email,
-    required String password,
-  }) async {
+  Future<void> signIn({required String email, required String password}) async {
     state = state.copyWith(status: AuthStatus.loading, error: null);
     try {
-      final user = await _repository.signIn(
-        email: email,
-        password: password,
-      );
+      final user = await _repository.signIn(email: email, password: password);
       state = AuthState(status: AuthStatus.authenticated, user: user);
     } catch (e) {
       state = AuthState(
@@ -92,6 +79,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
     required String email,
     required String password,
     required String fullName,
+    required UserRole role,
+    required String department,
+    required String profileId,
+    required String phone,
   }) async {
     state = state.copyWith(status: AuthStatus.loading, error: null);
     try {
@@ -99,6 +90,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
         email: email,
         password: password,
         fullName: fullName,
+        role: role,
+        department: department,
+        profileId: profileId,
+        phone: phone,
       );
       state = AuthState(status: AuthStatus.authenticated, user: user);
     } catch (e) {

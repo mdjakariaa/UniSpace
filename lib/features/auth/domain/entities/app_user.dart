@@ -9,6 +9,7 @@ class AppUser {
   final String? avatarUrl;
   final String? phone;
   final String? department;
+  final String? profileId;
   final DateTime createdAt;
 
   const AppUser({
@@ -19,6 +20,7 @@ class AppUser {
     this.avatarUrl,
     this.phone,
     this.department,
+    this.profileId,
     required this.createdAt,
   });
 
@@ -27,6 +29,7 @@ class AppUser {
     String? avatarUrl,
     String? phone,
     String? department,
+    String? profileId,
   }) {
     return AppUser(
       id: id,
@@ -36,6 +39,7 @@ class AppUser {
       avatarUrl: avatarUrl ?? this.avatarUrl,
       phone: phone ?? this.phone,
       department: department ?? this.department,
+      profileId: profileId ?? this.profileId,
       createdAt: createdAt,
     );
   }

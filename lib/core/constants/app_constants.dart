@@ -5,11 +5,6 @@ class AppConstants {
   static const String appName = 'UniSpace';
   static const String appTagline = 'Smart Study Spaces';
 
-  // Email domains for role detection
-  static const String studentDomain = 'student.lus.bd';
-  static const String teacherDomain = 'teacher.lus.bd';
-  static const String adminDomain = 'admin.lus.bd';
-
   // Time slot configuration
   static const int slotDurationMinutes = 60;
   static const int startHour = 8;
@@ -24,21 +19,6 @@ enum UserRole {
   student,
   teacher,
   admin;
-
-  /// Detect role from email domain
-  static UserRole fromEmail(String email) {
-    final domain = email.split('@').last.toLowerCase();
-    switch (domain) {
-      case AppConstants.studentDomain:
-        return UserRole.student;
-      case AppConstants.teacherDomain:
-        return UserRole.teacher;
-      case AppConstants.adminDomain:
-        return UserRole.admin;
-      default:
-        return UserRole.student;
-    }
-  }
 
   String get displayName {
     switch (this) {

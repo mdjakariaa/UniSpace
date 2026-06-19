@@ -32,7 +32,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   void _handleLogin() {
     if (_formKey.currentState?.validate() ?? false) {
-      ref.read(authProvider.notifier).signIn(
+      ref
+          .read(authProvider.notifier)
+          .signIn(
             email: _emailController.text.trim(),
             password: _passwordController.text,
           );
@@ -65,10 +67,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           gradient: RadialGradient(
             center: Alignment(-0.5, -0.5),
             radius: 1.5,
-            colors: [
-              Color(0xFF1A1040),
-              AppColors.background,
-            ],
+            colors: [Color(0xFF1A1040), AppColors.background],
           ),
         ),
         child: SafeArea(
@@ -83,27 +82,30 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
                   // Logo
                   Center(
-                    child: Container(
-                      width: 72,
-                      height: 72,
-                      decoration: BoxDecoration(
-                        gradient: AppColors.primaryGradient,
-                        borderRadius: BorderRadius.circular(22),
-                        boxShadow: [
-                          BoxShadow(
-                            color: AppColors.primary.withOpacity(0.3),
-                            blurRadius: 24,
-                            offset: const Offset(0, 8),
+                        child: Container(
+                          width: 72,
+                          height: 72,
+                          decoration: BoxDecoration(
+                            gradient: AppColors.primaryGradient,
+                            borderRadius: BorderRadius.circular(22),
+                            boxShadow: [
+                              BoxShadow(
+                                color: AppColors.primary.withOpacity(0.3),
+                                blurRadius: 24,
+                                offset: const Offset(0, 8),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
-                      child: const Icon(
-                        Icons.school_rounded,
-                        color: Colors.white,
-                        size: 36,
-                      ),
-                    ),
-                  ).animate().fadeIn(duration: 500.ms).scale(
+                          child: const Icon(
+                            Icons.school_rounded,
+                            color: Colors.white,
+                            size: 36,
+                          ),
+                        ),
+                      )
+                      .animate()
+                      .fadeIn(duration: 500.ms)
+                      .scale(
                         begin: const Offset(0.8, 0.8),
                         duration: 500.ms,
                         curve: Curves.easeOutBack,
@@ -111,16 +113,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
                   const SizedBox(height: 32),
 
-                  // Title
-                  Center(
-                    child: Text('Welcome Back', style: AppTextStyles.h1),
-                  ).animate(delay: 200.ms).fadeIn().slideY(begin: 0.2),
-
-                  const SizedBox(height: 8),
-
                   Center(
                     child: Text(
-                      'Sign in to continue to UniSpace',
+                      'Login to access your personalized dashboard',
                       style: AppTextStyles.bodyMedium,
                     ),
                   ).animate(delay: 300.ms).fadeIn(),
@@ -130,15 +125,18 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   // Email field
                   CustomTextField(
                     controller: _emailController,
-                    hintText: 'your.email@student.lus.bd',
+                    hintText: 'your.email@gmail.com',
                     labelText: 'Email',
                     prefixIcon: Icons.email_outlined,
                     keyboardType: TextInputType.emailAddress,
                     validator: (value) {
-                      if (value == null || value.isEmpty) {
+                      final email = value?.trim() ?? '';
+                      if (email.isEmpty) {
                         return 'Please enter your email';
                       }
-                      if (!value.contains('@')) {
+                      if (!RegExp(
+                        r'^[^@\s]+@[^@\s]+\.[^@\s]+$',
+                      ).hasMatch(email)) {
                         return 'Please enter a valid email';
                       }
                       return null;
@@ -254,41 +252,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       ],
                     ),
                   ).animate(delay: 700.ms).fadeIn(),
-
-                  const SizedBox(height: 32),
-
-                  // Role hint
-                  Center(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 12,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppColors.surfaceLight.withOpacity(0.5),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: AppColors.glassBorder),
-                      ),
-                      child: Column(
-                        children: [
-                          Text(
-                            '🎓 Role is auto-detected from your email',
-                            style: AppTextStyles.caption.copyWith(
-                              color: AppColors.textSecondary,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'student.lus.bd • teacher.lus.bd • admin.lus.bd',
-                            style: AppTextStyles.caption.copyWith(
-                              color: AppColors.accent,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ).animate(delay: 800.ms).fadeIn(),
 
                   const SizedBox(height: 24),
                 ],

@@ -1,3 +1,4 @@
+import 'package:unispace/core/constants/app_constants.dart';
 import 'package:unispace/features/auth/domain/entities/app_user.dart';
 
 /// Abstract auth repository — domain layer contract
@@ -6,16 +7,17 @@ abstract class AuthRepository {
   Future<AppUser?> getCurrentUser();
 
   /// Sign in with email and password
-  Future<AppUser> signIn({
-    required String email,
-    required String password,
-  });
+  Future<AppUser> signIn({required String email, required String password});
 
   /// Sign up with email, password, and full name
   Future<AppUser> signUp({
     required String email,
     required String password,
     required String fullName,
+    required UserRole role,
+    required String department,
+    required String profileId,
+    required String phone,
   });
 
   /// Sign out the current user
@@ -29,6 +31,7 @@ abstract class AuthRepository {
     String? fullName,
     String? phone,
     String? department,
+    String? profileId,
     String? avatarUrl,
   });
 }

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:unispace/core/constants/app_constants.dart';
 import 'package:unispace/core/errors/exceptions.dart';
 import 'package:unispace/features/auth/data/models/user_model.dart';
 
@@ -64,12 +65,22 @@ class AuthRemoteDataSource {
     required String email,
     required String password,
     required String fullName,
+    required UserRole role,
+    required String department,
+    required String profileId,
+    required String phone,
   }) async {
     try {
       final response = await _client.auth.signUp(
         email: email,
         password: password,
-        data: {'full_name': fullName},
+        data: {
+          'full_name': fullName,
+          'role': role.name,
+          'department': department,
+          'profile_id': profileId,
+          'phone': phone,
+        },
       );
 
       if (response.user == null) {
@@ -79,7 +90,18 @@ class AuthRemoteDataSource {
       // Wait briefly for the trigger to create the profile
       await Future.delayed(const Duration(milliseconds: 500));
 
-      // Fetch the profile created by the database trigger
+      await _client.from('profiles').upsert({
+        'id': response.user!.id,
+        'email': email,
+        'full_name': fullName,
+        'role': role.name,
+        'department': department,
+        'profile_id': profileId,
+        'phone': phone,
+        'status': 'active',
+      });
+
+      // Fetch the profile created by the database trigger or upsert
       final profile = await _client
           .from('profiles')
           .select()
@@ -90,17 +112,14 @@ class AuthRemoteDataSource {
         return UserModel.fromJson(profile);
       }
 
-      // If trigger hasn't fired yet, construct from auth data
-      final role = email.contains('@student.') ? 'student'
-          : email.contains('@teacher.') ? 'teacher'
-          : email.contains('@admin.') ? 'admin'
-          : 'student';
-
       return UserModel(
         id: response.user!.id,
         email: email,
         fullName: fullName,
-        role: UserModel.fromJson({'id': '', 'email': '', 'role': role, 'created_at': DateTime.now().toIso8601String()}).role,
+        role: role,
+        phone: phone,
+        department: department,
+        profileId: profileId,
         createdAt: DateTime.now(),
       );
     } on AuthApiException catch (e) {
@@ -147,6 +166,7 @@ class AuthRemoteDataSource {
     String? fullName,
     String? phone,
     String? department,
+    String? profileId,
     String? avatarUrl,
   }) async {
     try {
@@ -156,6 +176,7 @@ class AuthRemoteDataSource {
       if (fullName != null) updates['full_name'] = fullName;
       if (phone != null) updates['phone'] = phone;
       if (department != null) updates['department'] = department;
+      if (profileId != null) updates['profile_id'] = profileId;
       if (avatarUrl != null) updates['avatar_url'] = avatarUrl;
 
       await _client.from('profiles').update(updates).eq('id', userId);

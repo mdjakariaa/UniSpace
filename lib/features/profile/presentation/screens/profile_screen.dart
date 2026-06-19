@@ -40,33 +40,57 @@ class ProfileScreen extends ConsumerWidget {
                     gradient: AppColors.primaryGradient,
                     borderRadius: BorderRadius.circular(28),
                     boxShadow: [
-                      BoxShadow(color: AppColors.primary.withOpacity(0.3), blurRadius: 24, offset: const Offset(0, 8)),
+                      BoxShadow(
+                        color: AppColors.primary.withOpacity(0.3),
+                        blurRadius: 24,
+                        offset: const Offset(0, 8),
+                      ),
                     ],
                   ),
                   child: Center(
                     child: Text(
-                      user?.fullName.isNotEmpty == true ? user!.fullName[0].toUpperCase() : '?',
-                      style: GoogleFonts.outfit(fontSize: 36, fontWeight: FontWeight.w700, color: Colors.white),
+                      user?.fullName.isNotEmpty == true
+                          ? user!.fullName[0].toUpperCase()
+                          : '?',
+                      style: GoogleFonts.outfit(
+                        fontSize: 36,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
                     ),
                   ),
-                ).animate().fadeIn().scale(begin: const Offset(0.8, 0.8), curve: Curves.easeOutBack),
+                ).animate().fadeIn().scale(
+                  begin: const Offset(0.8, 0.8),
+                  curve: Curves.easeOutBack,
+                ),
 
                 const SizedBox(height: 16),
-                Text(user?.fullName ?? 'Unknown', style: AppTextStyles.h2).animate(delay: 200.ms).fadeIn(),
+                Text(
+                  user?.fullName ?? 'Unknown',
+                  style: AppTextStyles.h2,
+                ).animate(delay: 200.ms).fadeIn(),
                 const SizedBox(height: 4),
-                Text(user?.email ?? '', style: AppTextStyles.bodyMedium).animate(delay: 300.ms).fadeIn(),
+                Text(
+                  user?.email ?? '',
+                  style: AppTextStyles.bodyMedium,
+                ).animate(delay: 300.ms).fadeIn(),
                 const SizedBox(height: 8),
 
                 // Role badge
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: AppColors.primary.withOpacity(0.15),
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Text(
                     user?.role.displayName ?? 'Student',
-                    style: AppTextStyles.labelMedium.copyWith(color: AppColors.primary),
+                    style: AppTextStyles.labelMedium.copyWith(
+                      color: AppColors.primary,
+                    ),
                   ),
                 ).animate(delay: 400.ms).fadeIn(),
 
@@ -76,13 +100,41 @@ class ProfileScreen extends ConsumerWidget {
                 GlassCard(
                   child: Column(
                     children: [
-                      _ProfileRow(icon: Icons.email_outlined, label: 'Email', value: user?.email ?? '-'),
+                      _ProfileRow(
+                        icon: Icons.email_outlined,
+                        label: 'Email',
+                        value: user?.email ?? '-',
+                      ),
                       const Divider(color: AppColors.glassBorder, height: 20),
-                      _ProfileRow(icon: Icons.phone_outlined, label: 'Phone', value: user?.phone ?? 'Not set'),
+                      _ProfileRow(
+                        icon: Icons.work_outline_rounded,
+                        label: 'Designation',
+                        value: user?.role.displayName ?? '-',
+                      ),
                       const Divider(color: AppColors.glassBorder, height: 20),
-                      _ProfileRow(icon: Icons.school_outlined, label: 'Department', value: user?.department ?? 'Not set'),
+                      _ProfileRow(
+                        icon: Icons.phone_outlined,
+                        label: 'Phone',
+                        value: user?.phone ?? 'Not set',
+                      ),
                       const Divider(color: AppColors.glassBorder, height: 20),
-                      _ProfileRow(icon: Icons.calendar_today_outlined, label: 'Joined', value: user?.createdAt.toString().split(' ')[0] ?? '-'),
+                      _ProfileRow(
+                        icon: Icons.school_outlined,
+                        label: 'Department',
+                        value: user?.department ?? 'Not set',
+                      ),
+                      const Divider(color: AppColors.glassBorder, height: 20),
+                      _ProfileRow(
+                        icon: Icons.badge_outlined,
+                        label: 'ID',
+                        value: user?.profileId ?? 'Not set',
+                      ),
+                      const Divider(color: AppColors.glassBorder, height: 20),
+                      _ProfileRow(
+                        icon: Icons.calendar_today_outlined,
+                        label: 'Joined',
+                        value: user?.createdAt.toString().split(' ')[0] ?? '-',
+                      ),
                     ],
                   ),
                 ).animate(delay: 500.ms).fadeIn().slideY(begin: 0.1),
@@ -94,8 +146,16 @@ class ProfileScreen extends ConsumerWidget {
                   width: double.infinity,
                   child: OutlinedButton.icon(
                     onPressed: () => ref.read(authProvider.notifier).signOut(),
-                    icon: const Icon(Icons.logout_rounded, color: AppColors.error),
-                    label: Text('Sign Out', style: AppTextStyles.labelLarge.copyWith(color: AppColors.error)),
+                    icon: const Icon(
+                      Icons.logout_rounded,
+                      color: AppColors.error,
+                    ),
+                    label: Text(
+                      'Sign Out',
+                      style: AppTextStyles.labelLarge.copyWith(
+                        color: AppColors.error,
+                      ),
+                    ),
                     style: OutlinedButton.styleFrom(
                       side: const BorderSide(color: AppColors.error),
                       padding: const EdgeInsets.symmetric(vertical: 16),
@@ -117,7 +177,11 @@ class _ProfileRow extends StatelessWidget {
   final IconData icon;
   final String label;
   final String value;
-  const _ProfileRow({required this.icon, required this.label, required this.value});
+  const _ProfileRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
 
   @override
   Widget build(BuildContext context) {

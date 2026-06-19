@@ -4,10 +4,9 @@ A Flutter + Supabase group study room finder and seat booking system.
 
 ## What is included
 
-- Institutional email authentication
-  - `@student.lus.bd` -> Student dashboard
-  - `@teacher.lus.bd` -> Teacher dashboard
-  - `@admin.lus.bd` -> Admin dashboard
+- Standard email authentication
+  - Student and Teacher roles are selected during signup
+  - Admin access is login-only through the predefined admin account
 - Role-based fixed bottom navigation
 - Live room browsing and seat availability
 - Atomic seat booking with double-booking protection

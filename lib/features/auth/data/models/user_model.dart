@@ -11,6 +11,7 @@ class UserModel extends AppUser {
     super.avatarUrl,
     super.phone,
     super.department,
+    super.profileId,
     required super.createdAt,
   });
 
@@ -24,6 +25,7 @@ class UserModel extends AppUser {
       avatarUrl: json['avatar_url'] as String?,
       phone: json['phone'] as String?,
       department: json['department'] as String?,
+      profileId: json['profile_id'] as String?,
       createdAt: DateTime.parse(
         json['created_at'] as String? ?? DateTime.now().toIso8601String(),
       ),
@@ -40,6 +42,7 @@ class UserModel extends AppUser {
       'avatar_url': avatarUrl,
       'phone': phone,
       'department': department,
+      'profile_id': profileId,
     };
   }
 

@@ -9,6 +9,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:unispace/core/constants/supabase_constants.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
+const String kAdminEmail = 'mdjakaria111016@gmail.com';
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setSystemUIOverlayStyle(
@@ -64,7 +66,12 @@ class _UniSpaceAppState extends State<UniSpaceApp> {
 
   Future<AuthSession> _sessionFromUser(User user) async {
     final email = user.email ?? '';
-    final roleFromEmail = detectRoleFromEmail(email) ?? UniRole.student;
+    final metadataRole = detectRoleFromName(
+      user.userMetadata?['role']?.toString(),
+    );
+    final fallbackRole = email.toLowerCase().trim() == kAdminEmail
+        ? UniRole.admin
+        : metadataRole ?? UniRole.student;
     try {
       final profile = await Supabase.instance.client
           .from('profiles')
@@ -73,7 +80,7 @@ class _UniSpaceAppState extends State<UniSpaceApp> {
           .maybeSingle();
       if (profile != null) {
         final role =
-            detectRoleFromName(profile['role']?.toString()) ?? roleFromEmail;
+            detectRoleFromName(profile['role']?.toString()) ?? fallbackRole;
         return AuthSession(
           id: user.id,
           fullName:
@@ -82,19 +89,25 @@ class _UniSpaceAppState extends State<UniSpaceApp> {
               : _nameFromEmail(email, role),
           email: profile['email']?.toString() ?? email,
           role: role,
+          department: profile['department']?.toString(),
+          profileId: profile['profile_id']?.toString(),
+          phone: profile['phone']?.toString(),
         );
       }
     } catch (_) {
-      // Fall back to email metadata if database profile is not ready yet.
+      // Fall back to auth metadata if database profile is not ready yet.
     }
     final fullName = (user.userMetadata?['full_name'] as String?)?.trim();
     return AuthSession(
       id: user.id,
       fullName: fullName == null || fullName.isEmpty
-          ? _nameFromEmail(email, roleFromEmail)
+          ? _nameFromEmail(email, fallbackRole)
           : fullName,
       email: email,
-      role: roleFromEmail,
+      role: fallbackRole,
+      department: user.userMetadata?['department']?.toString(),
+      profileId: user.userMetadata?['profile_id']?.toString(),
+      phone: user.userMetadata?['phone']?.toString(),
     );
   }
 
@@ -207,14 +220,6 @@ extension UniRoleX on UniRole {
   };
 }
 
-UniRole? detectRoleFromEmail(String email) {
-  final normalized = email.toLowerCase().trim();
-  if (normalized.endsWith('@student.lus.bd')) return UniRole.student;
-  if (normalized.endsWith('@teacher.lus.bd')) return UniRole.teacher;
-  if (normalized.endsWith('@admin.lus.bd')) return UniRole.admin;
-  return null;
-}
-
 UniRole? detectRoleFromName(String? role) {
   switch ((role ?? '').toLowerCase().trim()) {
     case 'student':
@@ -233,12 +238,18 @@ class AuthSession {
   final String fullName;
   final String email;
   final UniRole role;
+  final String? department;
+  final String? profileId;
+  final String? phone;
 
   const AuthSession({
     required this.id,
     required this.fullName,
     required this.email,
     required this.role,
+    this.department,
+    this.profileId,
+    this.phone,
   });
 
   String get initials {
@@ -316,6 +327,9 @@ class _AuthScreenState extends State<AuthScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
+  final _departmentController = TextEditingController();
+  final _profileIdController = TextEditingController();
+  final _phoneController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
 
@@ -323,29 +337,20 @@ class _AuthScreenState extends State<AuthScreen> {
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
   bool _isSubmitting = false;
-  UniRole? _detectedRole;
+  UniRole _selectedDesignation = UniRole.student;
 
   bool get _isSignup => _view == AuthView.signup;
 
   @override
-  void initState() {
-    super.initState();
-    _emailController.addListener(_updateDetectedRole);
-  }
-
-  @override
   void dispose() {
-    _emailController.removeListener(_updateDetectedRole);
     _nameController.dispose();
     _emailController.dispose();
+    _departmentController.dispose();
+    _profileIdController.dispose();
+    _phoneController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
     super.dispose();
-  }
-
-  void _updateDetectedRole() {
-    final role = detectRoleFromEmail(_emailController.text.trim());
-    if (role != _detectedRole) setState(() => _detectedRole = role);
   }
 
   String _nameFromEmail(String email, UniRole role) {
@@ -365,12 +370,22 @@ class _AuthScreenState extends State<AuthScreen> {
         .join(' ');
   }
 
-  Future<void> _ensureProfile(User user, String name, UniRole role) async {
+  Future<void> _ensureProfile({
+    required User user,
+    required String name,
+    required UniRole role,
+    required String department,
+    required String profileId,
+    required String phone,
+  }) async {
     await Supabase.instance.client.from('profiles').upsert({
       'id': user.id,
       'email': user.email,
       'full_name': name,
       'role': role.value,
+      'department': department,
+      'profile_id': profileId,
+      'phone': phone,
       'status': 'active',
     });
   }
@@ -381,16 +396,13 @@ class _AuthScreenState extends State<AuthScreen> {
 
     final email = _emailController.text.trim().toLowerCase();
     final password = _passwordController.text;
-    final role = detectRoleFromEmail(email);
-    if (role == null) {
-      _showAuthMessage(
-        'Please use student.lus.bd, teacher.lus.bd, or admin.lus.bd email.',
-      );
-      return;
-    }
+    final role = _selectedDesignation;
     final name = _isSignup && _nameController.text.trim().isNotEmpty
         ? _nameController.text.trim()
-        : _nameFromEmail(email, role);
+        : _nameFromEmail(email, UniRole.student);
+    final department = _departmentController.text.trim();
+    final profileId = _profileIdController.text.trim();
+    final phone = _phoneController.text.trim();
 
     setState(() => _isSubmitting = true);
     try {
@@ -399,7 +411,13 @@ class _AuthScreenState extends State<AuthScreen> {
         response = await Supabase.instance.client.auth.signUp(
           email: email,
           password: password,
-          data: {'full_name': name, 'role': role.value},
+          data: {
+            'full_name': name,
+            'role': role.value,
+            'department': department,
+            'profile_id': profileId,
+            'phone': phone,
+          },
         );
       } else {
         response = await Supabase.instance.client.auth.signInWithPassword(
@@ -416,7 +434,16 @@ class _AuthScreenState extends State<AuthScreen> {
         setState(() => _view = AuthView.login);
         return;
       }
-      await _ensureProfile(user, name, role);
+      if (_isSignup) {
+        await _ensureProfile(
+          user: user,
+          name: name,
+          role: role,
+          department: department,
+          profileId: profileId,
+          phone: phone,
+        );
+      }
       await widget.onAuthenticated(user);
     } on AuthException catch (e) {
       _showAuthMessage(e.message);
@@ -434,6 +461,10 @@ class _AuthScreenState extends State<AuthScreen> {
       _view = view;
       _formKey.currentState?.reset();
       _confirmPasswordController.clear();
+      _departmentController.clear();
+      _profileIdController.clear();
+      _phoneController.clear();
+      _selectedDesignation = UniRole.student;
     });
   }
 
@@ -475,19 +506,9 @@ class _AuthScreenState extends State<AuthScreen> {
                       _authLogo(),
                       const SizedBox(height: 32),
                       Text(
-                        _isSignup ? 'Create Account' : 'Welcome Back',
-                        textAlign: TextAlign.center,
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 30,
-                          fontWeight: FontWeight.w800,
-                          color: AppPalette.text,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
                         _isSignup
-                            ? 'Sign up with your institutional email to access UniSpace.'
-                            : 'Login to open your role-based UniSpace dashboard.',
+                            ? 'Create your UniSpace account using your email'
+                            : 'Login to access your personalized dashboard',
                         textAlign: TextAlign.center,
                         style: GoogleFonts.dmSans(
                           fontSize: 14,
@@ -579,22 +600,53 @@ class _AuthScreenState extends State<AuthScreen> {
           ],
           _inputField(
             controller: _emailController,
-            label: 'Institutional Email',
-            hint: 'xyz@student.lus.bd',
+            label: 'Email Address',
+            hint: 'your.email@gmail.com',
             icon: Icons.email_outlined,
             keyboardType: TextInputType.emailAddress,
             validator: (value) {
-              if (value == null || value.trim().isEmpty)
-                return 'Please enter your email';
-              if (!value.contains('@')) return 'Please enter a valid email';
-              if (detectRoleFromEmail(value.trim()) == null)
-                return 'Use student, teacher, or admin institutional email';
+              final email = value?.trim() ?? '';
+              if (email.isEmpty) return 'Please enter your email';
+              if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
+                return 'Please enter a valid email';
+              }
               return null;
             },
           ),
-          if (_detectedRole != null) ...[
-            const SizedBox(height: 10),
-            Align(child: _roleBadge(_detectedRole!)),
+          if (_isSignup) ...[
+            const SizedBox(height: 16),
+            _designationDropdown(),
+            const SizedBox(height: 16),
+            _inputField(
+              controller: _departmentController,
+              label: 'Department',
+              hint: 'e.g. Computer Science',
+              icon: Icons.apartment_outlined,
+              validator: (value) => value == null || value.trim().isEmpty
+                  ? 'Please enter your department'
+                  : null,
+            ),
+            const SizedBox(height: 16),
+            _inputField(
+              controller: _profileIdController,
+              label: 'ID',
+              hint: 'e.g. 111016',
+              icon: Icons.badge_outlined,
+              validator: (value) => value == null || value.trim().isEmpty
+                  ? 'Please enter your ID'
+                  : null,
+            ),
+            const SizedBox(height: 16),
+            _inputField(
+              controller: _phoneController,
+              label: 'Phone Number',
+              hint: 'e.g. 01700000000',
+              icon: Icons.phone_outlined,
+              keyboardType: TextInputType.phone,
+              validator: (value) => value == null || value.trim().isEmpty
+                  ? 'Please enter your phone number'
+                  : null,
+            ),
           ],
           const SizedBox(height: 16),
           _inputField(
@@ -614,10 +666,12 @@ class _AuthScreenState extends State<AuthScreen> {
               ),
             ),
             validator: (value) {
-              if (value == null || value.isEmpty)
+              if (value == null || value.isEmpty) {
                 return 'Please enter your password';
-              if (value.length < 6)
+              }
+              if (value.length < 6) {
                 return 'Password must be at least 6 characters';
+              }
               return null;
             },
           ),
@@ -641,19 +695,19 @@ class _AuthScreenState extends State<AuthScreen> {
                 ),
               ),
               validator: (value) {
-                if (value == null || value.isEmpty)
+                if (value == null || value.isEmpty) {
                   return 'Please confirm your password';
-                if (value != _passwordController.text)
+                }
+                if (value != _passwordController.text) {
                   return 'Passwords do not match';
+                }
                 return null;
               },
             ),
           ],
           const SizedBox(height: 24),
           _authGradientButton(
-            _isSubmitting
-                ? 'Please wait…'
-                : (_isSignup ? 'Create Account' : 'Login'),
+            _isSubmitting ? 'Please wait…' : (_isSignup ? 'Sign Up' : 'Login'),
             _isSubmitting ? null : _submit,
           ),
           const SizedBox(height: 18),
@@ -683,16 +737,6 @@ class _AuthScreenState extends State<AuthScreen> {
                 ),
               ),
             ],
-          ),
-          const SizedBox(height: 14),
-          Text(
-            'Allowed domains: student.lus.bd • teacher.lus.bd • admin.lus.bd',
-            textAlign: TextAlign.center,
-            style: GoogleFonts.dmSans(
-              color: AppPalette.text3,
-              fontSize: 11,
-              height: 1.4,
-            ),
           ),
         ],
       ),
@@ -739,6 +783,49 @@ class _AuthScreenState extends State<AuthScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _designationDropdown() {
+    return DropdownButtonFormField<UniRole>(
+      initialValue: _selectedDesignation,
+      dropdownColor: AppPalette.surface2,
+      iconEnabledColor: AppPalette.text2,
+      style: GoogleFonts.dmSans(color: AppPalette.text, fontSize: 14),
+      decoration: InputDecoration(
+        labelText: 'Designation',
+        prefixIcon: const Icon(
+          Icons.work_outline_rounded,
+          color: AppPalette.text2,
+          size: 21,
+        ),
+        labelStyle: GoogleFonts.dmSans(
+          color: AppPalette.text2,
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+        ),
+        filled: true,
+        fillColor: AppPalette.surface2,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 16,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: AppPalette.border),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: AppPalette.accent, width: 1.2),
+        ),
+      ),
+      items: const [
+        DropdownMenuItem(value: UniRole.student, child: Text('Student')),
+        DropdownMenuItem(value: UniRole.teacher, child: Text('Teacher')),
+      ],
+      onChanged: (role) {
+        if (role != null) setState(() => _selectedDesignation = role);
+      },
     );
   }
 
@@ -791,43 +878,6 @@ class _AuthScreenState extends State<AuthScreen> {
           borderRadius: BorderRadius.circular(14),
           borderSide: const BorderSide(color: AppPalette.danger),
         ),
-      ),
-    );
-  }
-
-  Widget _roleBadge(UniRole role) {
-    final color = switch (role) {
-      UniRole.student => AppPalette.accent,
-      UniRole.teacher => AppPalette.accent3,
-      UniRole.admin => AppPalette.accent2,
-    };
-    final icon = switch (role) {
-      UniRole.student => Icons.school_outlined,
-      UniRole.teacher => Icons.co_present_outlined,
-      UniRole.admin => Icons.admin_panel_settings_outlined,
-    };
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 220),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.14),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withOpacity(0.32)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 16, color: color),
-          const SizedBox(width: 8),
-          Text(
-            'Role detected: ${role.label}',
-            style: GoogleFonts.dmSans(
-              color: color,
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -1210,13 +1260,13 @@ class WeeklyScheduleInfo {
   final String teacherId;
   final String teacherName;
   final String teacherEmail;
-  final int dayOfWeek;          // 0=Sun … 6=Sat
-  final String dayName;         // 'Sunday' … 'Saturday'
+  final int dayOfWeek; // 0=Sun … 6=Sat
+  final String dayName; // 'Sunday' … 'Saturday'
   final String startTime;
   final String endTime;
   final String timeSlot;
-  final String status;          // 'active', 'cancelled'
-  final DateTime nextDate;      // Next upcoming date matching dayOfWeek
+  final String status; // 'active', 'cancelled'
+  final DateTime nextDate; // Next upcoming date matching dayOfWeek
   final String? assignedBy;
   final DateTime createdAt;
 
@@ -1241,26 +1291,30 @@ class WeeklyScheduleInfo {
 
   factory WeeklyScheduleInfo.fromMap(Map<String, dynamic> row) {
     final nextDateRaw = row['next_date']?.toString() ?? '';
-    final nextDate = DateTime.tryParse(nextDateRaw) ?? _nextDateForDow(
-      _asInt(row['day_of_week'], 0),
-    );
+    final nextDate =
+        DateTime.tryParse(nextDateRaw) ??
+        _nextDateForDow(_asInt(row['day_of_week'], 0));
     return WeeklyScheduleInfo(
-      id:           row['id']?.toString() ?? '',
-      roomId:       row['room_id']?.toString() ?? '',
-      roomName:     row['room_name']?.toString() ?? 'Room',
+      id: row['id']?.toString() ?? '',
+      roomId: row['room_id']?.toString() ?? '',
+      roomName: row['room_name']?.toString() ?? 'Room',
       roomLocation: row['room_location']?.toString() ?? '',
-      teacherId:    row['teacher_id']?.toString() ?? '',
-      teacherName:  row['teacher_name']?.toString() ?? 'Teacher',
+      teacherId: row['teacher_id']?.toString() ?? '',
+      teacherName: row['teacher_name']?.toString() ?? 'Teacher',
       teacherEmail: row['teacher_email']?.toString() ?? '',
-      dayOfWeek:    _asInt(row['day_of_week'], 0),
-      dayName:      row['day_name']?.toString() ?? _dowName(_asInt(row['day_of_week'], 0)),
-      startTime:    _shortTime(row['start_time']?.toString() ?? ''),
-      endTime:      _shortTime(row['end_time']?.toString() ?? ''),
-      timeSlot:     row['time_slot']?.toString() ?? '',
-      status:       row['status']?.toString() ?? 'active',
-      nextDate:     nextDate,
-      assignedBy:   row['assigned_by']?.toString(),
-      createdAt:    DateTime.tryParse(row['created_at']?.toString() ?? '') ?? DateTime.now(),
+      dayOfWeek: _asInt(row['day_of_week'], 0),
+      dayName:
+          row['day_name']?.toString() ??
+          _dowName(_asInt(row['day_of_week'], 0)),
+      startTime: _shortTime(row['start_time']?.toString() ?? ''),
+      endTime: _shortTime(row['end_time']?.toString() ?? ''),
+      timeSlot: row['time_slot']?.toString() ?? '',
+      status: row['status']?.toString() ?? 'active',
+      nextDate: nextDate,
+      assignedBy: row['assigned_by']?.toString(),
+      createdAt:
+          DateTime.tryParse(row['created_at']?.toString() ?? '') ??
+          DateTime.now(),
     );
   }
 
@@ -1298,17 +1352,19 @@ class ScheduleExceptionInfo {
 
   factory ScheduleExceptionInfo.fromMap(Map<String, dynamic> row) {
     return ScheduleExceptionInfo(
-      id:          row['id']?.toString() ?? '',
-      scheduleId:  row['schedule_id']?.toString() ?? '',
-      roomName:    row['room_name']?.toString() ?? 'Room',
+      id: row['id']?.toString() ?? '',
+      scheduleId: row['schedule_id']?.toString() ?? '',
+      roomName: row['room_name']?.toString() ?? 'Room',
       teacherName: row['teacher_name']?.toString() ?? 'Teacher',
-      dayName:     row['day_name']?.toString() ?? '',
-      timeSlot:    row['time_slot']?.toString() ?? '',
-      skipDate:    row['skip_date']?.toString() ?? '',
-      reason:      row['reason']?.toString() ?? '',
+      dayName: row['day_name']?.toString() ?? '',
+      timeSlot: row['time_slot']?.toString() ?? '',
+      skipDate: row['skip_date']?.toString() ?? '',
+      reason: row['reason']?.toString() ?? '',
       requestedBy: row['requested_by']?.toString() ?? '',
-      status:      row['status']?.toString() ?? 'pending',
-      createdAt:   DateTime.tryParse(row['created_at']?.toString() ?? '') ?? DateTime.now(),
+      status: row['status']?.toString() ?? 'pending',
+      createdAt:
+          DateTime.tryParse(row['created_at']?.toString() ?? '') ??
+          DateTime.now(),
     );
   }
 
@@ -1332,7 +1388,15 @@ class _AdminActivityItem {
 }
 
 String _dowName(int dow) {
-  const names = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const names = [
+    'Sunday',
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday',
+  ];
   return (dow >= 0 && dow < 7) ? names[dow] : 'Day';
 }
 
@@ -1374,13 +1438,14 @@ class EventInfo {
       place: map['place']?.toString() ?? '',
       duration: map['duration']?.toString() ?? '',
       guests: map['guests']?.toString() ?? '',
-      createdAt: map['created_at'] != null ? DateTime.parse(map['created_at'].toString()) : DateTime.now(),
+      createdAt: map['created_at'] != null
+          ? DateTime.parse(map['created_at'].toString())
+          : DateTime.now(),
     );
   }
 
   String get displayDate => _dateDisplay(date);
 }
-
 
 class StudyGroupInfo {
   final String id;
@@ -1989,7 +2054,9 @@ class UniSpaceRepository {
   }
 
   /// Fetch schedule exceptions (admin only). status: 'pending', 'approved', 'rejected'.
-  Future<List<ScheduleExceptionInfo>> fetchScheduleExceptions(String? status) async {
+  Future<List<ScheduleExceptionInfo>> fetchScheduleExceptions(
+    String? status,
+  ) async {
     final rows = await client.rpc(
       'fetch_schedule_exceptions',
       params: <String, dynamic>{'p_status': status},
@@ -2101,7 +2168,8 @@ class UniSpaceRepository {
     try {
       await client
           .from('study_groups')
-          .update({'room_id': null}).eq('room_id', roomId);
+          .update({'room_id': null})
+          .eq('room_id', roomId);
     } catch (_) {}
 
     // Step 4: Delete the room (room_ratings CASCADE auto-deletes)
@@ -2131,7 +2199,10 @@ class UniSpaceRepository {
   }
 
   Future<List<EventInfo>> fetchEvents() async {
-    final rows = await client.from('events').select().order('date', ascending: true);
+    final rows = await client
+        .from('events')
+        .select()
+        .order('date', ascending: true);
     return (rows as List)
         .map((e) => EventInfo.fromMap(Map<String, dynamic>.from(e)))
         .toList();
@@ -2164,14 +2235,17 @@ class UniSpaceRepository {
     required String duration,
     required String guests,
   }) async {
-    await client.from('events').update({
-      'name': name,
-      'description': description,
-      'date': _isoDate(date),
-      'place': place,
-      'duration': duration,
-      'guests': guests,
-    }).eq('id', id);
+    await client
+        .from('events')
+        .update({
+          'name': name,
+          'description': description,
+          'date': _isoDate(date),
+          'place': place,
+          'duration': duration,
+          'guests': guests,
+        })
+        .eq('id', id);
   }
 
   Future<void> deleteEvent(String id) async {
@@ -2308,20 +2382,24 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     int fallbackHourOffset = 0,
   }) {
     final parsed = _parseScheduleTime(time);
-    final effective = parsed ??
+    final effective =
+        parsed ??
         (fallback == null
             ? const TimeOfDay(hour: 0, minute: 0)
             : TimeOfDay(
                 hour: (fallback.hour + fallbackHourOffset).clamp(0, 23).toInt(),
                 minute: fallback.minute,
               ));
-    return DateTime(date.year, date.month, date.day, effective.hour, effective.minute);
+    return DateTime(
+      date.year,
+      date.month,
+      date.day,
+      effective.hour,
+      effective.minute,
+    );
   }
 
-  DateTime _scheduleOccurrenceEnd(
-    WeeklyScheduleInfo schedule,
-    DateTime date,
-  ) {
+  DateTime _scheduleOccurrenceEnd(WeeklyScheduleInfo schedule, DateTime date) {
     final end = _parseScheduleTime(schedule.endTime);
     if (end == null) {
       return DateTime(date.year, date.month, date.day, 23, 59, 59, 999);
@@ -2390,11 +2468,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     final matches = _scheduleExceptions.where((exception) {
       return exception.scheduleId == schedule.id &&
           exception.status == 'approved' &&
-          _scheduleExceptionStillApplies(
-            schedule,
-            exception,
-            now: currentTime,
-          );
+          _scheduleExceptionStillApplies(schedule, exception, now: currentTime);
     }).toList();
     if (matches.isEmpty) return null;
 
@@ -2412,7 +2486,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   DateTime _nextActiveOccurrenceForSchedule(WeeklyScheduleInfo schedule) {
     var occurrence = _nextOccurrenceForSchedule(schedule);
     for (var i = 0; i < 52; i++) {
-      final approved = _scheduleExceptionForDate(schedule, occurrence, 'approved');
+      final approved = _scheduleExceptionForDate(
+        schedule,
+        occurrence,
+        'approved',
+      );
       if (approved == null ||
           !_scheduleExceptionStillApplies(schedule, approved)) {
         return occurrence;
@@ -2572,13 +2650,17 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       final weeklySchedules = _role == UniRole.teacher || _role == UniRole.admin
           ? await _repo.fetchWeeklySchedules()
           : <WeeklyScheduleInfo>[];
-      final scheduleExceptions = _role == UniRole.teacher || _role == UniRole.admin
+      final scheduleExceptions =
+          _role == UniRole.teacher || _role == UniRole.admin
           ? await _repo.fetchScheduleExceptions(null)
           : <ScheduleExceptionInfo>[];
       final List<SlotAvailability> todaySlots;
       if (rooms.isNotEmpty) {
         final todaySlotsList = await Future.wait(
-          rooms.map((r) => _repo.fetchSlotAvailability(roomId: r.id, date: DateTime.now()))
+          rooms.map(
+            (r) =>
+                _repo.fetchSlotAvailability(roomId: r.id, date: DateTime.now()),
+          ),
         );
         todaySlots = todaySlotsList.expand((s) => s).toList();
       } else {
@@ -2640,7 +2722,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final isDesktop = constraints.maxWidth >= 900;
-        final showHeader = (_role == UniRole.student && _page == 'home') ||
+        final showHeader =
+            (_role == UniRole.student && _page == 'home') ||
             (_role == UniRole.teacher && _page == 'teacher-dashboard') ||
             (_role == UniRole.admin && _page == 'admin-dashboard');
         return Scaffold(
@@ -2708,26 +2791,110 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     switch (role) {
       case UniRole.student:
         return [
-          const NavEntry('home', '🏠', 'Home', iconData: Icons.home_rounded, inactiveIconData: Icons.home_outlined),
-          const NavEntry('rooms', '🚪', 'Browse Rooms', iconData: Icons.meeting_room_rounded, inactiveIconData: Icons.meeting_room_outlined),
-          const NavEntry('bookings', '📅', 'My Bookings', iconData: Icons.calendar_month_rounded, inactiveIconData: Icons.calendar_month_outlined),
-          const NavEntry('groups', '👥', 'Group Study', iconData: Icons.groups_rounded, inactiveIconData: Icons.groups_outlined),
-          const NavEntry('student-events', '📅', 'Events', iconData: Icons.event_rounded, inactiveIconData: Icons.event_outlined),
+          const NavEntry(
+            'home',
+            '🏠',
+            'Home',
+            iconData: Icons.home_rounded,
+            inactiveIconData: Icons.home_outlined,
+          ),
+          const NavEntry(
+            'rooms',
+            '🚪',
+            'Browse Rooms',
+            iconData: Icons.meeting_room_rounded,
+            inactiveIconData: Icons.meeting_room_outlined,
+          ),
+          const NavEntry(
+            'bookings',
+            '📅',
+            'My Bookings',
+            iconData: Icons.calendar_month_rounded,
+            inactiveIconData: Icons.calendar_month_outlined,
+          ),
+          const NavEntry(
+            'groups',
+            '👥',
+            'Group Study',
+            iconData: Icons.groups_rounded,
+            inactiveIconData: Icons.groups_outlined,
+          ),
+          const NavEntry(
+            'student-events',
+            '📅',
+            'Events',
+            iconData: Icons.event_rounded,
+            inactiveIconData: Icons.event_outlined,
+          ),
         ];
       case UniRole.teacher:
         return [
-          const NavEntry('teacher-rooms', 'Rooms', 'Browse Rooms', iconData: Icons.meeting_room_rounded, inactiveIconData: Icons.meeting_room_outlined),
-          const NavEntry('teacher-dashboard', '📊', 'Dashboard', iconData: Icons.dashboard_rounded, inactiveIconData: Icons.dashboard_outlined),
-          const NavEntry('teacher-assigned-rooms', '🏫', 'Assigned Rooms', iconData: Icons.meeting_room_rounded, inactiveIconData: Icons.meeting_room_outlined),
-          const NavEntry('teacher-events', '📅', 'Events', iconData: Icons.event_rounded, inactiveIconData: Icons.event_outlined),
+          const NavEntry(
+            'teacher-rooms',
+            'Rooms',
+            'Browse Rooms',
+            iconData: Icons.meeting_room_rounded,
+            inactiveIconData: Icons.meeting_room_outlined,
+          ),
+          const NavEntry(
+            'teacher-dashboard',
+            '📊',
+            'Dashboard',
+            iconData: Icons.dashboard_rounded,
+            inactiveIconData: Icons.dashboard_outlined,
+          ),
+          const NavEntry(
+            'teacher-assigned-rooms',
+            '🏫',
+            'Assigned Rooms',
+            iconData: Icons.meeting_room_rounded,
+            inactiveIconData: Icons.meeting_room_outlined,
+          ),
+          const NavEntry(
+            'teacher-events',
+            '📅',
+            'Events',
+            iconData: Icons.event_rounded,
+            inactiveIconData: Icons.event_outlined,
+          ),
         ];
       case UniRole.admin:
         return [
-          const NavEntry('admin-dashboard', '📊', 'Dashboard', iconData: Icons.dashboard_rounded, inactiveIconData: Icons.dashboard_outlined),
-          const NavEntry('admin-users', '👥', 'User Management', iconData: Icons.people_rounded, inactiveIconData: Icons.people_outline_rounded),
-          const NavEntry('admin-rooms', '🚪', 'Room Management', iconData: Icons.meeting_room_rounded, inactiveIconData: Icons.meeting_room_outlined),
-          const NavEntry('admin-events', '📅', 'Events', iconData: Icons.event_rounded, inactiveIconData: Icons.event_outlined),
-          const NavEntry('admin-monitor', '📡', 'Booking Monitor', iconData: Icons.monitor_heart_rounded, inactiveIconData: Icons.monitor_heart_outlined),
+          const NavEntry(
+            'admin-dashboard',
+            '📊',
+            'Dashboard',
+            iconData: Icons.dashboard_rounded,
+            inactiveIconData: Icons.dashboard_outlined,
+          ),
+          const NavEntry(
+            'admin-users',
+            '👥',
+            'User Management',
+            iconData: Icons.people_rounded,
+            inactiveIconData: Icons.people_outline_rounded,
+          ),
+          const NavEntry(
+            'admin-rooms',
+            '🚪',
+            'Room Management',
+            iconData: Icons.meeting_room_rounded,
+            inactiveIconData: Icons.meeting_room_outlined,
+          ),
+          const NavEntry(
+            'admin-events',
+            '📅',
+            'Events',
+            iconData: Icons.event_rounded,
+            inactiveIconData: Icons.event_outlined,
+          ),
+          const NavEntry(
+            'admin-monitor',
+            '📡',
+            'Booking Monitor',
+            iconData: Icons.monitor_heart_rounded,
+            inactiveIconData: Icons.monitor_heart_outlined,
+          ),
         ];
     }
   }
@@ -3131,12 +3298,31 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       greeting = 'Good evening 🌙';
     }
 
-    final weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-    final months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    final weekdays = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
     ];
-    final dateStr = '${weekdays[now.weekday - 1]}, ${months[now.month - 1]} ${now.day}';
+    final months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    final dateStr =
+        '${weekdays[now.weekday - 1]}, ${months[now.month - 1]} ${now.day}';
     final userName = widget.user.fullName.split(' ').first;
 
     return Container(
@@ -3153,10 +3339,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             ).copyWith(letterSpacing: 1.2),
           ),
           const SizedBox(height: 6),
-          _heading(
-            '$greeting,\n$userName',
-            size: 26,
-          ),
+          _heading('$greeting,\n$userName', size: 26),
           const SizedBox(height: 4),
           Text(
             'Let\'s find your perfect study spot.',
@@ -3215,7 +3398,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   const SizedBox(height: 4),
                   Text(
                     'Secure a seat or study room right away to focus.',
-                    style: _body(size: 12, color: AppPalette.text2, height: 1.3),
+                    style: _body(
+                      size: 12,
+                      color: AppPalette.text2,
+                      height: 1.3,
+                    ),
                   ),
                 ],
               ),
@@ -3226,7 +3413,10 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppPalette.accent,
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
+                ),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(10),
                 ),
@@ -3234,7 +3424,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               ),
               child: Text(
                 'Book Now',
-                style: _body(size: 12, color: Colors.white, weight: FontWeight.w700),
+                style: _body(
+                  size: 12,
+                  color: Colors.white,
+                  weight: FontWeight.w700,
+                ),
               ),
             ),
           ],
@@ -3255,7 +3449,10 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        border: Border.all(color: AppPalette.accent.withOpacity(0.25), width: 1.2),
+        border: Border.all(
+          color: AppPalette.accent.withOpacity(0.25),
+          width: 1.2,
+        ),
         boxShadow: [
           BoxShadow(
             color: AppPalette.accent.withOpacity(0.05),
@@ -3285,11 +3482,17 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: AppPalette.accent.withOpacity(0.15),
                         borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: AppPalette.accent.withOpacity(0.3), width: 1),
+                        border: Border.all(
+                          color: AppPalette.accent.withOpacity(0.3),
+                          width: 1,
+                        ),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
@@ -3376,7 +3579,9 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      booking.seatsBooked > 1 ? '${booking.seatsBooked} Seats Reserved' : 'Seat Reserved',
+                      booking.seatsBooked > 1
+                          ? '${booking.seatsBooked} Seats Reserved'
+                          : 'Seat Reserved',
                       style: _body(
                         size: 12,
                         color: AppPalette.text2,
@@ -3395,7 +3600,10 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.white,
                         foregroundColor: AppPalette.bg,
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 8,
+                        ),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10),
                         ),
@@ -3422,11 +3630,16 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   }
 
   Widget _studentLiveOccupancyCard() {
-    final openSlots = _todaySlots.where((slot) =>
-      slot.status != 'blocked_by_admin' && slot.status != 'cancellation_pending'
-    ).toList();
+    final openSlots = _todaySlots
+        .where(
+          (slot) =>
+              slot.status != 'blocked_by_admin' &&
+              slot.status != 'cancellation_pending',
+        )
+        .toList();
 
-    final totalSeatsFallback = _rooms.fold<int>(0, (sum, r) => sum + r.capacity) * 8;
+    final totalSeatsFallback =
+        _rooms.fold<int>(0, (sum, r) => sum + r.capacity) * 8;
     final totalSeats = _todaySlots.isEmpty
         ? totalSeatsFallback
         : openSlots.fold<int>(0, (sum, s) => sum + s.totalSeats);
@@ -3434,7 +3647,9 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         ? 0
         : openSlots.fold<int>(0, (sum, s) => sum + s.bookedSeats);
 
-    final occupancyPercent = totalSeats > 0 ? (occupiedSeats / totalSeats).clamp(0.0, 1.0) : 0.0;
+    final occupancyPercent = totalSeats > 0
+        ? (occupiedSeats / totalSeats).clamp(0.0, 1.0)
+        : 0.0;
     final displayPercent = (occupancyPercent * 100).round();
 
     Color statusColor;
@@ -3506,11 +3721,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
           const SizedBox(height: 4),
           Text(
             statusDesc,
-            style: _body(
-              size: 12,
-              color: AppPalette.text2,
-              height: 1.4,
-            ),
+            style: _body(size: 12, color: AppPalette.text2, height: 1.4),
           ),
           const SizedBox(height: 14),
           ClipRRect(
@@ -3598,10 +3809,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                     color: item.color.withOpacity(0.12),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: Text(
-                    item.emoji,
-                    style: const TextStyle(fontSize: 20),
-                  ),
+                  child: Text(item.emoji, style: const TextStyle(fontSize: 20)),
                 ),
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -3617,10 +3825,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                     const SizedBox(height: 2),
                     Text(
                       item.desc,
-                      style: _body(
-                        size: 11,
-                        color: AppPalette.text2,
-                      ),
+                      style: _body(size: 11, color: AppPalette.text2),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -3657,9 +3862,12 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               height: 100,
               decoration: BoxDecoration(
                 gradient: LinearGradient(
-                  colors: room.colors.isNotEmpty 
-                    ? room.colors 
-                    : [AppPalette.accent.withOpacity(0.4), AppPalette.accent2.withOpacity(0.4)],
+                  colors: room.colors.isNotEmpty
+                      ? room.colors
+                      : [
+                          AppPalette.accent.withOpacity(0.4),
+                          AppPalette.accent2.withOpacity(0.4),
+                        ],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
@@ -3667,22 +3875,34 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               child: Stack(
                 children: [
                   Center(
-                    child: Text(room.icon, style: const TextStyle(fontSize: 36)),
+                    child: Text(
+                      room.icon,
+                      style: const TextStyle(fontSize: 36),
+                    ),
                   ),
                   Positioned(
                     top: 10,
                     right: 10,
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
                       decoration: BoxDecoration(
-                        color: (isAvailable ? AppPalette.accent3 : AppPalette.danger).withOpacity(0.2),
+                        color:
+                            (isAvailable
+                                    ? AppPalette.accent3
+                                    : AppPalette.danger)
+                                .withOpacity(0.2),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
                         isAvailable ? 'Available' : 'Full',
                         style: _body(
                           size: 10,
-                          color: isAvailable ? AppPalette.accent3 : AppPalette.danger,
+                          color: isAvailable
+                              ? AppPalette.accent3
+                              : AppPalette.danger,
                           weight: FontWeight.w800,
                         ),
                       ),
@@ -3698,7 +3918,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 children: [
                   Text(
                     room.name,
-                    style: _body(size: 14, color: AppPalette.text, weight: FontWeight.w700),
+                    style: _body(
+                      size: 14,
+                      color: AppPalette.text,
+                      weight: FontWeight.w700,
+                    ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -3719,7 +3943,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                       ),
                       Text(
                         '⭐ ${room.rating.toStringAsFixed(1)}',
-                        style: _body(size: 10, color: AppPalette.warn, weight: FontWeight.w700),
+                        style: _body(
+                          size: 10,
+                          color: AppPalette.warn,
+                          weight: FontWeight.w700,
+                        ),
                       ),
                     ],
                   ),
@@ -3727,15 +3955,17 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   ClipRRect(
                     borderRadius: BorderRadius.circular(4),
                     child: LinearProgressIndicator(
-                      value: room.capacity > 0 ? (room.capacity - room.available) / room.capacity : 0,
+                      value: room.capacity > 0
+                          ? (room.capacity - room.available) / room.capacity
+                          : 0,
                       minHeight: 3,
                       backgroundColor: AppPalette.surface2,
                       valueColor: AlwaysStoppedAnimation<Color>(
                         occupancyPercent > 80
                             ? AppPalette.danger
                             : occupancyPercent > 50
-                                ? AppPalette.warn
-                                : AppPalette.accent3,
+                            ? AppPalette.warn
+                            : AppPalette.accent3,
                       ),
                     ),
                   ),
@@ -3776,7 +4006,9 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       minTileWidth: 200,
       aspectRatio: 1.1,
       bottom: 24,
-      children: popularRooms.map((room) => _studentPopularRoomCard(room)).toList(),
+      children: popularRooms
+          .map((room) => _studentPopularRoomCard(room))
+          .toList(),
     );
   }
 
@@ -3789,24 +4021,25 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     }).toList();
 
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _studentHomeGreetingHeader(),
-        _studentUpcomingBookingCard(),
-        _studentLiveOccupancyCard(),
-        _studentHomeEventsCard(upcomingEvents),
-        _sectionHeader(
-          '⚡ Quick Shortcuts',
-        ),
-        _studentQuickActionsGrid(),
-        _sectionHeader(
-          '🔥 Popular Rooms Right Now',
-          action: 'View All →',
-          onAction: () => _navigate('rooms'),
-        ),
-        _studentPopularRoomsGrid(),
-      ],
-    ).animate().fadeIn(duration: 450.ms).slideY(begin: 0.03, curve: Curves.easeOutCubic);
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _studentHomeGreetingHeader(),
+            _studentUpcomingBookingCard(),
+            _studentLiveOccupancyCard(),
+            _studentHomeEventsCard(upcomingEvents),
+            _sectionHeader('⚡ Quick Shortcuts'),
+            _studentQuickActionsGrid(),
+            _sectionHeader(
+              '🔥 Popular Rooms Right Now',
+              action: 'View All →',
+              onAction: () => _navigate('rooms'),
+            ),
+            _studentPopularRoomsGrid(),
+          ],
+        )
+        .animate()
+        .fadeIn(duration: 450.ms)
+        .slideY(begin: 0.03, curve: Curves.easeOutCubic);
   }
 
   Widget _studentHomeEventsCard(List<EventInfo> events) {
@@ -3856,7 +4089,10 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppPalette.accent2.withOpacity(0.25), width: 1.2),
+        border: Border.all(
+          color: AppPalette.accent2.withOpacity(0.25),
+          width: 1.2,
+        ),
         boxShadow: [
           BoxShadow(
             color: AppPalette.accent2.withOpacity(0.04),
@@ -3875,24 +4111,38 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 decoration: BoxDecoration(
                   color: AppPalette.accent2.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppPalette.accent2.withOpacity(0.30)),
+                  border: Border.all(
+                    color: AppPalette.accent2.withOpacity(0.30),
+                  ),
                 ),
                 child: Text(
                   'Campus Event',
-                  style: _body(size: 9, color: AppPalette.accent2, weight: FontWeight.w800),
+                  style: _body(
+                    size: 9,
+                    color: AppPalette.accent2,
+                    weight: FontWeight.w800,
+                  ),
                 ),
               ),
               const Spacer(),
               Text(
                 event.displayDate,
-                style: _body(size: 11, color: AppPalette.text2, weight: FontWeight.w600),
+                style: _body(
+                  size: 11,
+                  color: AppPalette.text2,
+                  weight: FontWeight.w600,
+                ),
               ),
             ],
           ),
           const SizedBox(height: 12),
           Text(
             event.name,
-            style: _body(size: 14, weight: FontWeight.bold, color: AppPalette.text),
+            style: _body(
+              size: 14,
+              weight: FontWeight.bold,
+              color: AppPalette.text,
+            ),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
@@ -3911,7 +4161,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
           const SizedBox(height: 8),
           Row(
             children: [
-              const Icon(Icons.place_outlined, size: 12, color: AppPalette.accent2),
+              const Icon(
+                Icons.place_outlined,
+                size: 12,
+                color: AppPalette.accent2,
+              ),
               const SizedBox(width: 4),
               Expanded(
                 child: Text(
@@ -3923,7 +4177,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               ),
               if (event.duration.isNotEmpty) ...[
                 const SizedBox(width: 8),
-                const Icon(Icons.schedule_outlined, size: 12, color: AppPalette.accent2),
+                const Icon(
+                  Icons.schedule_outlined,
+                  size: 12,
+                  color: AppPalette.accent2,
+                ),
                 const SizedBox(width: 4),
                 Text(
                   event.duration,
@@ -4171,7 +4429,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       children: [
         _pageHeader(
           'My Profile',
-          'Role-based access is controlled by your institutional email',
+          'Your saved UniSpace account and role details',
         ),
         Container(
           width: double.infinity,
@@ -4230,6 +4488,50 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
           ),
         ),
         const SizedBox(height: 24),
+        _sectionHeader('Profile Details'),
+        _SurfaceCard(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              _profileDetailRow(
+                Icons.person_outline_rounded,
+                'Full Name',
+                widget.user.fullName,
+              ),
+              const Divider(color: AppPalette.border, height: 18),
+              _profileDetailRow(
+                Icons.email_outlined,
+                'Email Address',
+                widget.user.email,
+              ),
+              const Divider(color: AppPalette.border, height: 18),
+              _profileDetailRow(
+                Icons.work_outline_rounded,
+                'Designation',
+                widget.user.role.label,
+              ),
+              const Divider(color: AppPalette.border, height: 18),
+              _profileDetailRow(
+                Icons.apartment_outlined,
+                'Department',
+                _profileValue(widget.user.department),
+              ),
+              const Divider(color: AppPalette.border, height: 18),
+              _profileDetailRow(
+                Icons.badge_outlined,
+                'ID',
+                _profileValue(widget.user.profileId),
+              ),
+              const Divider(color: AppPalette.border, height: 18),
+              _profileDetailRow(
+                Icons.phone_outlined,
+                'Phone Number',
+                _profileValue(widget.user.phone),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 24),
         _sectionHeader('⚙️ Settings'),
         _SurfaceCard(
           padding: const EdgeInsets.all(8),
@@ -4249,6 +4551,35 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 AppPalette.danger,
                 danger: true,
                 onTap: widget.onSignOut,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  String _profileValue(String? value) {
+    final trimmed = value?.trim() ?? '';
+    return trimmed.isEmpty ? 'Not set' : trimmed;
+  }
+
+  Widget _profileDetailRow(IconData icon, String label, String value) {
+    return Row(
+      children: [
+        Icon(icon, size: 20, color: AppPalette.text2),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: _body(size: 11, color: AppPalette.text2)),
+              const SizedBox(height: 2),
+              Text(
+                value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: _body(size: 14, weight: FontWeight.w700),
               ),
             ],
           ),
@@ -4288,17 +4619,46 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     }
     final teacherName = widget.user.fullName.split(' ').first;
 
-    final weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    final dateStr = '${weekdays[now.weekday - 1]}, ${months[now.month - 1]} ${now.day}, ${now.year}';
+    final weekdays = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
+    ];
+    final months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    final dateStr =
+        '${weekdays[now.weekday - 1]}, ${months[now.month - 1]} ${now.day}, ${now.year}';
 
     final nextClass = _latestUpcomingWeeklySchedule();
     final ownRequests = _requests.length + _scheduleExceptions.length;
     final activeAssigned = _weeklySchedules
-        .where((s) => _displayStatusForSchedule(
-              s,
-              occurrenceDate: _statusDateForSchedule(s, useTeacherDateFilter: false),
-            ) == 'active')
+        .where(
+          (s) =>
+              _displayStatusForSchedule(
+                s,
+                occurrenceDate: _statusDateForSchedule(
+                  s,
+                  useTeacherDateFilter: false,
+                ),
+              ) ==
+              'active',
+        )
         .length;
 
     // Upcoming events preview (next 2 events)
@@ -4323,8 +4683,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   children: [
                     Text(
                       dateStr.toUpperCase(),
-                      style: _body(size: 11, color: AppPalette.accent3, weight: FontWeight.w800)
-                          .copyWith(letterSpacing: 1.2),
+                      style: _body(
+                        size: 11,
+                        color: AppPalette.accent3,
+                        weight: FontWeight.w800,
+                      ).copyWith(letterSpacing: 1.2),
                     ),
                     const SizedBox(height: 6),
                     RichText(
@@ -4333,16 +4696,23 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                           TextSpan(
                             text: '$greeting, ',
                             style: GoogleFonts.plusJakartaSans(
-                              fontSize: 26, fontWeight: FontWeight.w400, color: AppPalette.text,
+                              fontSize: 26,
+                              fontWeight: FontWeight.w400,
+                              color: AppPalette.text,
                             ),
                           ),
                           TextSpan(
                             text: teacherName,
                             style: GoogleFonts.plusJakartaSans(
-                              fontSize: 26, fontWeight: FontWeight.w800, color: AppPalette.text,
+                              fontSize: 26,
+                              fontWeight: FontWeight.w800,
+                              color: AppPalette.text,
                             ),
                           ),
-                          const TextSpan(text: ' 👨‍🏫', style: TextStyle(fontSize: 22)),
+                          const TextSpan(
+                            text: ' 👨‍🏫',
+                            style: TextStyle(fontSize: 22),
+                          ),
                         ],
                       ),
                     ),
@@ -4364,21 +4734,37 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               ),
               // Live updates indicator
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   color: AppPalette.accent3.withOpacity(0.10),
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: AppPalette.accent3.withOpacity(0.25)),
+                  border: Border.all(
+                    color: AppPalette.accent3.withOpacity(0.25),
+                  ),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Container(
-                      width: 6, height: 6,
-                      decoration: const BoxDecoration(color: AppPalette.accent3, shape: BoxShape.circle),
+                      width: 6,
+                      height: 6,
+                      decoration: const BoxDecoration(
+                        color: AppPalette.accent3,
+                        shape: BoxShape.circle,
+                      ),
                     ),
                     const SizedBox(width: 6),
-                    Text('Live updates', style: _body(size: 11, color: AppPalette.accent3, weight: FontWeight.w700)),
+                    Text(
+                      'Live updates',
+                      style: _body(
+                        size: 11,
+                        color: AppPalette.accent3,
+                        weight: FontWeight.w700,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -4389,7 +4775,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         // ── Quick Action Cards ─────────────────────────────────────────
         Text(
           'QUICK ACTIONS',
-          style: _body(size: 11, color: AppPalette.text3, weight: FontWeight.w800).copyWith(letterSpacing: 1.4),
+          style: _body(
+            size: 11,
+            color: AppPalette.text3,
+            weight: FontWeight.w800,
+          ).copyWith(letterSpacing: 1.4),
         ),
         const SizedBox(height: 12),
         Row(
@@ -4418,7 +4808,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         // ── Next Class Section ────────────────────────────────────────
         Text(
           'NEXT CLASS SCHEDULE',
-          style: _body(size: 11, color: AppPalette.text3, weight: FontWeight.w800).copyWith(letterSpacing: 1.4),
+          style: _body(
+            size: 11,
+            color: AppPalette.text3,
+            weight: FontWeight.w800,
+          ).copyWith(letterSpacing: 1.4),
         ),
         const SizedBox(height: 12),
         if (nextClass == null)
@@ -4431,9 +4825,15 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 children: [
                   const Text('📅', style: TextStyle(fontSize: 32)),
                   const SizedBox(height: 10),
-                  Text('No upcoming classes', style: _body(size: 15, weight: FontWeight.bold)),
+                  Text(
+                    'No upcoming classes',
+                    style: _body(size: 15, weight: FontWeight.bold),
+                  ),
                   const SizedBox(height: 4),
-                  Text('You have no upcoming admin-assigned classes.', style: _body(size: 12, color: AppPalette.text2)),
+                  Text(
+                    'You have no upcoming admin-assigned classes.',
+                    style: _body(size: 12, color: AppPalette.text2),
+                  ),
                 ],
               ),
             ),
@@ -4446,7 +4846,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         // ── Upcoming University Events Card ───────────────────────────
         Text(
           'UPCOMING UNIVERSITY EVENTS',
-          style: _body(size: 11, color: AppPalette.text3, weight: FontWeight.w800).copyWith(letterSpacing: 1.4),
+          style: _body(
+            size: 11,
+            color: AppPalette.text3,
+            weight: FontWeight.w800,
+          ).copyWith(letterSpacing: 1.4),
         ),
         const SizedBox(height: 12),
         _teacherDashboardEventsCard(upcomingEvents),
@@ -4462,24 +4866,40 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: AppPalette.border),
       ),
-      child: Text(text, style: _body(size: 11, color: AppPalette.text2, weight: FontWeight.w700)),
+      child: Text(
+        text,
+        style: _body(
+          size: 11,
+          color: AppPalette.text2,
+          weight: FontWeight.w700,
+        ),
+      ),
     );
   }
 
   Widget _teacherNextClassCard(WeeklyScheduleInfo schedule) {
     final occurrenceDate = _nextActiveOccurrenceForSchedule(schedule);
-    final displayStatus = _displayStatusForSchedule(schedule, occurrenceDate: occurrenceDate);
+    final displayStatus = _displayStatusForSchedule(
+      schedule,
+      occurrenceDate: occurrenceDate,
+    );
     final hasPendingSkip = displayStatus == 'cancellation_pending';
     final cancellable = displayStatus == 'active';
     return Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [AppPalette.accent.withOpacity(0.18), AppPalette.accent2.withOpacity(0.08)],
+          colors: [
+            AppPalette.accent.withOpacity(0.18),
+            AppPalette.accent2.withOpacity(0.08),
+          ],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppPalette.accent.withOpacity(0.35), width: 1.5),
+        border: Border.all(
+          color: AppPalette.accent.withOpacity(0.35),
+          width: 1.5,
+        ),
         boxShadow: [
           BoxShadow(
             color: AppPalette.accent.withOpacity(0.06),
@@ -4496,7 +4916,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Container(
-                width: 46, height: 46,
+                width: 46,
+                height: 46,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   gradient: AppPalette.mainGradient,
@@ -4511,7 +4932,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   children: [
                     Text(
                       schedule.roomName,
-                      style: GoogleFonts.plusJakartaSans(fontSize: 18, fontWeight: FontWeight.w800, color: AppPalette.text),
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        color: AppPalette.text,
+                      ),
                     ),
                     const SizedBox(height: 4),
                     Text(
@@ -4534,9 +4959,24 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             ),
             child: Row(
               children: [
-                Expanded(child: _nextClassInfoItem(Icons.calendar_today_outlined, 'Every ${schedule.dayName} (Next: ${_dateDisplay(_isoDate(occurrenceDate))})')),
-                Container(width: 1, height: 20, color: AppPalette.border, margin: const EdgeInsets.symmetric(horizontal: 10)),
-                Expanded(child: _nextClassInfoItem(Icons.schedule_outlined, schedule.timeSlot)),
+                Expanded(
+                  child: _nextClassInfoItem(
+                    Icons.calendar_today_outlined,
+                    'Every ${schedule.dayName} (Next: ${_dateDisplay(_isoDate(occurrenceDate))})',
+                  ),
+                ),
+                Container(
+                  width: 1,
+                  height: 20,
+                  color: AppPalette.border,
+                  margin: const EdgeInsets.symmetric(horizontal: 10),
+                ),
+                Expanded(
+                  child: _nextClassInfoItem(
+                    Icons.schedule_outlined,
+                    schedule.timeSlot,
+                  ),
+                ),
               ],
             ),
           ),
@@ -4558,7 +4998,13 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                       hasPendingSkip
                           ? 'Skipped for this date'
                           : 'Active assignment',
-                      style: _body(size: 12, color: hasPendingSkip ? AppPalette.warn : AppPalette.accent3, weight: FontWeight.bold),
+                      style: _body(
+                        size: 12,
+                        color: hasPendingSkip
+                            ? AppPalette.warn
+                            : AppPalette.accent3,
+                        weight: FontWeight.bold,
+                      ),
                     ),
             ],
           ),
@@ -4595,14 +5041,28 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             children: [
               Row(
                 children: [
-                  const Icon(Icons.campaign_outlined, color: AppPalette.accent2, size: 20),
+                  const Icon(
+                    Icons.campaign_outlined,
+                    color: AppPalette.accent2,
+                    size: 20,
+                  ),
                   const SizedBox(width: 8),
-                  Text('Upcoming University Events', style: _body(size: 15, weight: FontWeight.bold)),
+                  Text(
+                    'Upcoming University Events',
+                    style: _body(size: 15, weight: FontWeight.bold),
+                  ),
                 ],
               ),
               TextButton(
                 onPressed: () => _navigate('teacher-events'),
-                child: Text('View All', style: _body(size: 12, color: AppPalette.accent2, weight: FontWeight.bold)),
+                child: Text(
+                  'View All',
+                  style: _body(
+                    size: 12,
+                    color: AppPalette.accent2,
+                    weight: FontWeight.bold,
+                  ),
+                ),
               ),
             ],
           ),
@@ -4631,7 +5091,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                           color: AppPalette.accent2.withOpacity(0.10),
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: const Icon(Icons.event_note_rounded, color: AppPalette.accent2, size: 18),
+                        child: const Icon(
+                          Icons.event_note_rounded,
+                          color: AppPalette.accent2,
+                          size: 18,
+                        ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -4670,16 +5134,26 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     if (_teacherBuildingFilter != 'All') {
       final query = _teacherBuildingFilter.toLowerCase().trim();
       if (query == 'other') {
-        list = list.where((s) => !s.roomLocation.toLowerCase().contains('rkb') && !s.roomLocation.toLowerCase().contains('rab')).toList();
+        list = list
+            .where(
+              (s) =>
+                  !s.roomLocation.toLowerCase().contains('rkb') &&
+                  !s.roomLocation.toLowerCase().contains('rab'),
+            )
+            .toList();
       } else {
-        list = list.where((s) => s.roomLocation.toLowerCase().contains(query)).toList();
+        list = list
+            .where((s) => s.roomLocation.toLowerCase().contains(query))
+            .toList();
       }
     }
     // Status filter
     if (_teacherStatusFilter != 'All') {
       final queryStatus = _teacherStatusFilter.toLowerCase();
       list = list
-          .where((s) => _displayStatusForSchedule(s).toLowerCase() == queryStatus)
+          .where(
+            (s) => _displayStatusForSchedule(s).toLowerCase() == queryStatus,
+          )
           .toList();
     }
     // Date filter
@@ -4710,7 +5184,14 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Text('Building:', style: _body(size: 13, weight: FontWeight.bold, color: AppPalette.text2)),
+                  Text(
+                    'Building:',
+                    style: _body(
+                      size: 13,
+                      weight: FontWeight.bold,
+                      color: AppPalette.text2,
+                    ),
+                  ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: SingleChildScrollView(
@@ -4721,13 +5202,25 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                           return Padding(
                             padding: const EdgeInsets.only(right: 6),
                             child: ChoiceChip(
-                              label: Text(bldg, style: _body(size: 12, color: isSelected ? Colors.white : AppPalette.text2, weight: FontWeight.bold)),
+                              label: Text(
+                                bldg,
+                                style: _body(
+                                  size: 12,
+                                  color: isSelected
+                                      ? Colors.white
+                                      : AppPalette.text2,
+                                  weight: FontWeight.bold,
+                                ),
+                              ),
                               selected: isSelected,
                               selectedColor: AppPalette.accent,
                               backgroundColor: AppPalette.surface2,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
                               onSelected: (val) {
-                                if (val) setState(() => _teacherBuildingFilter = bldg);
+                                if (val)
+                                  setState(() => _teacherBuildingFilter = bldg);
                               },
                             ),
                           );
@@ -4743,7 +5236,14 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Text('Status:', style: _body(size: 13, weight: FontWeight.bold, color: AppPalette.text2)),
+                  Text(
+                    'Status:',
+                    style: _body(
+                      size: 13,
+                      weight: FontWeight.bold,
+                      color: AppPalette.text2,
+                    ),
+                  ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: SingleChildScrollView(
@@ -4754,13 +5254,25 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                           return Padding(
                             padding: const EdgeInsets.only(right: 6),
                             child: ChoiceChip(
-                              label: Text(status, style: _body(size: 12, color: isSelected ? Colors.white : AppPalette.text2, weight: FontWeight.bold)),
+                              label: Text(
+                                status,
+                                style: _body(
+                                  size: 12,
+                                  color: isSelected
+                                      ? Colors.white
+                                      : AppPalette.text2,
+                                  weight: FontWeight.bold,
+                                ),
+                              ),
                               selected: isSelected,
                               selectedColor: AppPalette.accent2,
                               backgroundColor: AppPalette.surface2,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
                               onSelected: (val) {
-                                if (val) setState(() => _teacherStatusFilter = status);
+                                if (val)
+                                  setState(() => _teacherStatusFilter = status);
                               },
                             ),
                           );
@@ -4775,16 +5287,29 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               // Date Picker Filter
               Row(
                 children: [
-                  Icon(Icons.calendar_today_outlined, size: 16, color: AppPalette.text2),
+                  Icon(
+                    Icons.calendar_today_outlined,
+                    size: 16,
+                    color: AppPalette.text2,
+                  ),
                   const SizedBox(width: 8),
-                  Text('Filter by Date:', style: _body(size: 13, weight: FontWeight.bold, color: AppPalette.text2)),
+                  Text(
+                    'Filter by Date:',
+                    style: _body(
+                      size: 13,
+                      weight: FontWeight.bold,
+                      color: AppPalette.text2,
+                    ),
+                  ),
                   const SizedBox(width: 12),
                   InkWell(
                     onTap: () async {
                       final picked = await showDatePicker(
                         context: context,
                         initialDate: _teacherDateFilter ?? DateTime.now(),
-                        firstDate: DateTime.now().subtract(const Duration(days: 365)),
+                        firstDate: DateTime.now().subtract(
+                          const Duration(days: 365),
+                        ),
                         lastDate: DateTime.now().add(const Duration(days: 365)),
                         builder: (context, child) => Theme(
                           data: ThemeData.dark().copyWith(
@@ -4801,7 +5326,10 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                       }
                     },
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
                       decoration: BoxDecoration(
                         color: AppPalette.surface2,
                         borderRadius: BorderRadius.circular(8),
@@ -4811,15 +5339,25 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                         _teacherDateFilter == null
                             ? 'Select Date'
                             : _dateDisplay(_isoDate(_teacherDateFilter!)),
-                        style: _body(size: 13, color: _teacherDateFilter == null ? AppPalette.text3 : AppPalette.text),
+                        style: _body(
+                          size: 13,
+                          color: _teacherDateFilter == null
+                              ? AppPalette.text3
+                              : AppPalette.text,
+                        ),
                       ),
                     ),
                   ),
                   if (_teacherDateFilter != null) ...[
                     const SizedBox(width: 8),
                     IconButton(
-                      icon: const Icon(Icons.clear_rounded, size: 18, color: AppPalette.danger),
-                      onPressed: () => setState(() => _teacherDateFilter = null),
+                      icon: const Icon(
+                        Icons.clear_rounded,
+                        size: 18,
+                        color: AppPalette.danger,
+                      ),
+                      onPressed: () =>
+                          setState(() => _teacherDateFilter = null),
                       tooltip: 'Clear Date Filter',
                     ),
                   ],
@@ -4850,7 +5388,10 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
 
   Widget _teacherAssignedScheduleCard(WeeklyScheduleInfo schedule) {
     final occurrenceDate = _statusDateForSchedule(schedule);
-    final displayStatus = _displayStatusForSchedule(schedule, occurrenceDate: occurrenceDate);
+    final displayStatus = _displayStatusForSchedule(
+      schedule,
+      occurrenceDate: occurrenceDate,
+    );
     final hasPendingSkip = displayStatus == 'cancellation_pending';
     final isCancelled = displayStatus == 'cancelled';
     final cancellable = displayStatus == 'active';
@@ -4925,7 +5466,9 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                         () => _showTeacherSkipDialog(schedule),
                       )
                     : _plain(
-                        hasPendingSkip ? 'Skipped for this date' : 'No action available',
+                        hasPendingSkip
+                            ? 'Skipped for this date'
+                            : 'No action available',
                       ),
               ),
             ],
@@ -4952,7 +5495,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 itemCount: _events.length,
-                separatorBuilder: (context, index) => const SizedBox(height: 16),
+                separatorBuilder: (context, index) =>
+                    const SizedBox(height: 16),
                 itemBuilder: (context, index) {
                   final event = _events[index];
                   return _teacherEventCard(event);
@@ -4974,22 +5518,35 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               Expanded(
                 child: Text(
                   event.name,
-                  style: _body(size: 16, weight: FontWeight.bold, color: AppPalette.text),
+                  style: _body(
+                    size: 16,
+                    weight: FontWeight.bold,
+                    color: AppPalette.text,
+                  ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
               const SizedBox(width: 8),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 5,
+                ),
                 decoration: BoxDecoration(
                   color: AppPalette.accent2.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: AppPalette.accent2.withOpacity(0.30)),
+                  border: Border.all(
+                    color: AppPalette.accent2.withOpacity(0.30),
+                  ),
                 ),
                 child: Text(
                   'Programme',
-                  style: _body(size: 11, color: AppPalette.accent2, weight: FontWeight.w700),
+                  style: _body(
+                    size: 11,
+                    color: AppPalette.accent2,
+                    weight: FontWeight.w700,
+                  ),
                 ),
               ),
             ],
@@ -5034,7 +5591,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 itemCount: _events.length,
-                separatorBuilder: (context, index) => const SizedBox(height: 16),
+                separatorBuilder: (context, index) =>
+                    const SizedBox(height: 16),
                 itemBuilder: (context, index) {
                   final event = _events[index];
                   return _studentEventCard(event);
@@ -5056,22 +5614,35 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               Expanded(
                 child: Text(
                   event.name,
-                  style: _body(size: 16, weight: FontWeight.bold, color: AppPalette.text),
+                  style: _body(
+                    size: 16,
+                    weight: FontWeight.bold,
+                    color: AppPalette.text,
+                  ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
               const SizedBox(width: 8),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 5,
+                ),
                 decoration: BoxDecoration(
                   color: AppPalette.accent2.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: AppPalette.accent2.withOpacity(0.30)),
+                  border: Border.all(
+                    color: AppPalette.accent2.withOpacity(0.30),
+                  ),
                 ),
                 child: Text(
                   'Programme',
-                  style: _body(size: 11, color: AppPalette.accent2, weight: FontWeight.w700),
+                  style: _body(
+                    size: 11,
+                    color: AppPalette.accent2,
+                    weight: FontWeight.w700,
+                  ),
                 ),
               ),
             ],
@@ -5130,7 +5701,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 'No skip requests submitted',
                 'Submit a skip request from Booking Management.',
               )
-            : Column(children: _scheduleExceptions.map(_exceptionCancelItem).toList()),
+            : Column(
+                children: _scheduleExceptions
+                    .map(_exceptionCancelItem)
+                    .toList(),
+              ),
       ],
     );
   }
@@ -5140,16 +5715,25 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     required bool teacherActions,
   }) {
     return _tableCard(
-      headers: const ['Room', 'Weekly Schedule', 'Next Occurrence', 'Status', 'Action'],
+      headers: const [
+        'Room',
+        'Weekly Schedule',
+        'Next Occurrence',
+        'Status',
+        'Action',
+      ],
       flexes: const [2, 2, 2, 1, 1],
       rows: schedules.map((s) {
         final occurrenceDate = teacherActions
             ? _nextActiveOccurrenceForSchedule(s)
             : _statusDateForSchedule(s);
         final nextOccurrenceDisplay = _dateDisplay(_isoDate(occurrenceDate));
-        final displayStatus = _displayStatusForSchedule(s, occurrenceDate: occurrenceDate);
+        final displayStatus = _displayStatusForSchedule(
+          s,
+          occurrenceDate: occurrenceDate,
+        );
         final hasPendingSkip = displayStatus == 'cancellation_pending';
-        
+
         return [
           _twoLine(s.roomName, s.roomLocation),
           _twoLine('Every ${s.dayName}', s.timeSlot),
@@ -5157,12 +5741,12 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
           _statusFromText(displayStatus),
           teacherActions
               ? (displayStatus == 'active'
-                  ? _actionButton(
-                      'Request Skip',
-                      AppPalette.warn,
-                      () => _showTeacherSkipDialog(s),
-                    )
-                  : _plain(hasPendingSkip ? 'Skip Pending' : '—'))
+                    ? _actionButton(
+                        'Request Skip',
+                        AppPalette.warn,
+                        () => _showTeacherSkipDialog(s),
+                      )
+                    : _plain(hasPendingSkip ? 'Skip Pending' : '—'))
               : _plain('—'),
         ];
       }).toList(),
@@ -5173,8 +5757,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     final color = exception.status == 'approved'
         ? AppPalette.accent3
         : exception.status == 'rejected'
-            ? AppPalette.danger
-            : AppPalette.warn;
+        ? AppPalette.danger
+        : AppPalette.warn;
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: _SurfaceCard(
@@ -5193,8 +5777,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 exception.status == 'approved'
                     ? '✅'
                     : exception.status == 'rejected'
-                        ? '❌'
-                        : '🕐',
+                    ? '❌'
+                    : '🕐',
                 style: const TextStyle(fontSize: 20),
               ),
             ),
@@ -5274,7 +5858,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                       initialDate: selectedSkipDate,
                       firstDate: DateTime.now(),
                       lastDate: DateTime.now().add(const Duration(days: 365)),
-                      selectableDayPredicate: (date) => date.weekday % 7 == schedule.dayOfWeek,
+                      selectableDayPredicate: (date) =>
+                          date.weekday % 7 == schedule.dayOfWeek,
                       builder: (context, child) => Theme(
                         data: ThemeData.dark().copyWith(
                           colorScheme: const ColorScheme.dark(
@@ -5333,19 +5918,49 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     }
     final adminName = widget.user.fullName.split(' ').first;
 
-    final weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    final dateStr = '${weekdays[now.weekday - 1]}, ${months[now.month - 1]} ${now.day}, ${now.year}';
+    final weekdays = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
+    ];
+    final months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    final dateStr =
+        '${weekdays[now.weekday - 1]}, ${months[now.month - 1]} ${now.day}, ${now.year}';
 
-    final bookingsToday = _bookings.where((b) => b.date == _isoDate(DateTime.now())).length;
-    final bookingsThisWeek = List.generate(7, (i) => DateTime.now().subtract(Duration(days: 6 - i)))
-        .fold<int>(0, (sum, d) => sum + _bookings.where((b) => b.date == _isoDate(d)).length);
+    final bookingsToday = _bookings
+        .where((b) => b.date == _isoDate(DateTime.now()))
+        .length;
+    final bookingsThisWeek =
+        List.generate(
+          7,
+          (i) => DateTime.now().subtract(Duration(days: 6 - i)),
+        ).fold<int>(
+          0,
+          (sum, d) =>
+              sum + _bookings.where((b) => b.date == _isoDate(d)).length,
+        );
     final activeUsers = _users.where((u) => u.status == 'active').length;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-
         // ── Greeting Header ──────────────────────────────────────────
         Container(
           margin: const EdgeInsets.only(bottom: 28),
@@ -5358,8 +5973,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   children: [
                     Text(
                       dateStr.toUpperCase(),
-                      style: _body(size: 11, color: AppPalette.accent2, weight: FontWeight.w800)
-                          .copyWith(letterSpacing: 1.2),
+                      style: _body(
+                        size: 11,
+                        color: AppPalette.accent2,
+                        weight: FontWeight.w800,
+                      ).copyWith(letterSpacing: 1.2),
                     ),
                     const SizedBox(height: 6),
                     RichText(
@@ -5368,16 +5986,23 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                           TextSpan(
                             text: '$greeting, ',
                             style: GoogleFonts.plusJakartaSans(
-                              fontSize: 26, fontWeight: FontWeight.w400, color: AppPalette.text,
+                              fontSize: 26,
+                              fontWeight: FontWeight.w400,
+                              color: AppPalette.text,
                             ),
                           ),
                           TextSpan(
                             text: adminName,
                             style: GoogleFonts.plusJakartaSans(
-                              fontSize: 26, fontWeight: FontWeight.w800, color: AppPalette.text,
+                              fontSize: 26,
+                              fontWeight: FontWeight.w800,
+                              color: AppPalette.text,
                             ),
                           ),
-                          const TextSpan(text: ' 🛠️', style: TextStyle(fontSize: 22)),
+                          const TextSpan(
+                            text: ' 🛠️',
+                            style: TextStyle(fontSize: 22),
+                          ),
                         ],
                       ),
                     ),
@@ -5391,21 +6016,37 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               ),
               // Live indicator badge
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
                   color: AppPalette.accent3.withOpacity(0.10),
                   borderRadius: BorderRadius.circular(30),
-                  border: Border.all(color: AppPalette.accent3.withOpacity(0.30)),
+                  border: Border.all(
+                    color: AppPalette.accent3.withOpacity(0.30),
+                  ),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Container(
-                      width: 7, height: 7,
-                      decoration: const BoxDecoration(color: AppPalette.accent3, shape: BoxShape.circle),
+                      width: 7,
+                      height: 7,
+                      decoration: const BoxDecoration(
+                        color: AppPalette.accent3,
+                        shape: BoxShape.circle,
+                      ),
                     ),
                     const SizedBox(width: 7),
-                    Text('Live', style: _body(size: 12, color: AppPalette.accent3, weight: FontWeight.w700)),
+                    Text(
+                      'Live',
+                      style: _body(
+                        size: 12,
+                        color: AppPalette.accent3,
+                        weight: FontWeight.w700,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -5416,7 +6057,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         // ── 4 Stat Cards ─────────────────────────────────────────────
         LayoutBuilder(
           builder: (ctx, c) {
-            final cols = c.maxWidth > 700 ? 4 : c.maxWidth > 440 ? 2 : 1;
+            final cols = c.maxWidth > 700
+                ? 4
+                : c.maxWidth > 440
+                ? 2
+                : 1;
             return GridView(
               gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: cols,
@@ -5465,8 +6110,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             children: [
               Text(
                 'QUICK ACTIONS',
-                style: _body(size: 11, color: AppPalette.text3, weight: FontWeight.w800)
-                    .copyWith(letterSpacing: 1.4),
+                style: _body(
+                  size: 11,
+                  color: AppPalette.text3,
+                  weight: FontWeight.w800,
+                ).copyWith(letterSpacing: 1.4),
               ),
               const SizedBox(height: 12),
               LayoutBuilder(
@@ -5558,7 +6206,9 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         ),
         boxShadow: [
           BoxShadow(
-            color: highlight ? iconColor.withOpacity(0.08) : Colors.black.withOpacity(0.10),
+            color: highlight
+                ? iconColor.withOpacity(0.08)
+                : Colors.black.withOpacity(0.10),
             blurRadius: 18,
             offset: const Offset(0, 6),
           ),
@@ -5581,8 +6231,12 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               ),
               if (highlight)
                 Container(
-                  width: 8, height: 8,
-                  decoration: BoxDecoration(color: iconColor, shape: BoxShape.circle),
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: iconColor,
+                    shape: BoxShape.circle,
+                  ),
                 ),
             ],
           ),
@@ -5615,7 +6269,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 const SizedBox(height: 4),
                 Text(
                   sub,
-                  style: _body(size: 11, color: subColor, weight: FontWeight.w600),
+                  style: _body(
+                    size: 11,
+                    color: subColor,
+                    weight: FontWeight.w600,
+                  ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -5677,10 +6335,21 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   color: color,
                   borderRadius: BorderRadius.circular(20),
                 ),
-                child: Text(badge, style: _body(size: 10, color: Colors.white, weight: FontWeight.w800)),
+                child: Text(
+                  badge,
+                  style: _body(
+                    size: 10,
+                    color: Colors.white,
+                    weight: FontWeight.w800,
+                  ),
+                ),
               ),
             ] else
-              Icon(Icons.arrow_forward_ios_rounded, size: 12, color: AppPalette.text3),
+              Icon(
+                Icons.arrow_forward_ios_rounded,
+                size: 12,
+                color: AppPalette.text3,
+              ),
           ],
         ),
       ),
@@ -5691,40 +6360,47 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     final items = <_AdminActivityItem>[];
 
     for (final booking in _bookings) {
-      final bookingDate = DateTime.tryParse(booking.date) ??
+      final bookingDate =
+          DateTime.tryParse(booking.date) ??
           DateTime.fromMillisecondsSinceEpoch(0);
-      items.add(_AdminActivityItem(
-        title: booking.isTeacherRoomBooking
-            ? 'Teacher booking: ${booking.userName}'
-            : 'Seat booking: ${booking.userName}',
-        subtitle:
-            '${booking.roomName} - ${booking.displayDate} - ${booking.timeRange}',
-        status: booking.status,
-        initials: _initials(booking.userName),
-        timestamp: _scheduleDateTime(bookingDate, booking.startTime),
-      ));
+      items.add(
+        _AdminActivityItem(
+          title: booking.isTeacherRoomBooking
+              ? 'Teacher booking: ${booking.userName}'
+              : 'Seat booking: ${booking.userName}',
+          subtitle:
+              '${booking.roomName} - ${booking.displayDate} - ${booking.timeRange}',
+          status: booking.status,
+          initials: _initials(booking.userName),
+          timestamp: _scheduleDateTime(bookingDate, booking.startTime),
+        ),
+      );
     }
 
     for (final schedule in _weeklySchedules) {
-      items.add(_AdminActivityItem(
-        title: 'Weekly schedule: ${schedule.teacherName}',
-        subtitle:
-            '${schedule.roomName} - Every ${schedule.dayName} - ${schedule.timeSlot}',
-        status: schedule.status,
-        initials: _initials(schedule.teacherName),
-        timestamp: schedule.createdAt,
-      ));
+      items.add(
+        _AdminActivityItem(
+          title: 'Weekly schedule: ${schedule.teacherName}',
+          subtitle:
+              '${schedule.roomName} - Every ${schedule.dayName} - ${schedule.timeSlot}',
+          status: schedule.status,
+          initials: _initials(schedule.teacherName),
+          timestamp: schedule.createdAt,
+        ),
+      );
     }
 
     for (final exception in _scheduleExceptions) {
-      items.add(_AdminActivityItem(
-        title: 'Skip request: ${exception.teacherName}',
-        subtitle:
-            '${exception.roomName} - ${exception.skipDateDisplay} - ${exception.timeSlot}',
-        status: exception.status,
-        initials: _initials(exception.teacherName),
-        timestamp: exception.createdAt,
-      ));
+      items.add(
+        _AdminActivityItem(
+          title: 'Skip request: ${exception.teacherName}',
+          subtitle:
+              '${exception.roomName} - ${exception.skipDateDisplay} - ${exception.timeSlot}',
+          status: exception.status,
+          initials: _initials(exception.teacherName),
+          timestamp: exception.createdAt,
+        ),
+      );
     }
 
     items.sort((a, b) => b.timestamp.compareTo(a.timestamp));
@@ -5738,9 +6414,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     if (status == 'pending' || status == 'cancellation_pending') {
       return AppPalette.warn;
     }
-    if (status == 'approved' ||
-        status == 'completed' ||
-        status == 'released') {
+    if (status == 'approved' || status == 'completed' || status == 'released') {
       return AppPalette.accent;
     }
     return AppPalette.accent3;
@@ -5761,8 +6435,10 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 onTap: () => _navigate('admin-monitor'),
                 borderRadius: BorderRadius.circular(8),
                 child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   child: Text(
                     'View all',
                     style: _body(
@@ -5851,7 +6527,10 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
 
   // ignore: unused_element
   Widget _legacyAdminRecentActivity() {
-    final recent = _bookings.where((b) => b.isTeacherRoomBooking).take(6).toList();
+    final recent = _bookings
+        .where((b) => b.isTeacherRoomBooking)
+        .take(6)
+        .toList();
     return _SurfaceCard(
       padding: const EdgeInsets.all(20),
       child: Column(
@@ -5865,10 +6544,17 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 onTap: () => _navigate('admin-monitor'),
                 borderRadius: BorderRadius.circular(8),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   child: Text(
                     'View all →',
-                    style: _body(size: 12, color: AppPalette.accent, weight: FontWeight.w700),
+                    style: _body(
+                      size: 12,
+                      color: AppPalette.accent,
+                      weight: FontWeight.w700,
+                    ),
                   ),
                 ),
               ),
@@ -5879,7 +6565,10 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 16),
               child: Center(
-                child: Text('No teacher activity yet', style: _body(size: 13, color: AppPalette.text2)),
+                child: Text(
+                  'No teacher activity yet',
+                  style: _body(size: 13, color: AppPalette.text2),
+                ),
               ),
             )
           else
@@ -5890,15 +6579,17 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               final statusColor = isActive
                   ? AppPalette.accent3
                   : b.status == 'cancelled'
-                      ? AppPalette.danger
-                      : b.status == 'pending'
-                          ? AppPalette.warn
-                          : AppPalette.text2;
+                  ? AppPalette.danger
+                  : b.status == 'pending'
+                  ? AppPalette.warn
+                  : AppPalette.text2;
               return Container(
                 padding: const EdgeInsets.symmetric(vertical: 11),
                 decoration: BoxDecoration(
                   border: i < recent.length - 1
-                      ? const Border(bottom: BorderSide(color: AppPalette.border))
+                      ? const Border(
+                          bottom: BorderSide(color: AppPalette.border),
+                        )
                       : null,
                 ),
                 child: Row(
@@ -5924,14 +6615,21 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                     ),
                     const SizedBox(width: 10),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 9,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: statusColor.withOpacity(0.12),
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text(
                         b.status[0].toUpperCase() + b.status.substring(1),
-                        style: _body(size: 10, color: statusColor, weight: FontWeight.w700),
+                        style: _body(
+                          size: 10,
+                          color: statusColor,
+                          weight: FontWeight.w700,
+                        ),
                       ),
                     ),
                   ],
@@ -5942,7 +6640,6 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       ),
     );
   }
-
 
   Widget _adminUsers() {
     return Column(
@@ -5968,10 +6665,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
           room.id != _adminManagedRoomFilter) {
         return false;
       }
-      if (!_matchesBuildingFilter(
-        room.building,
-        _adminManagedBuildingFilter,
-      )) {
+      if (!_matchesBuildingFilter(room.building, _adminManagedBuildingFilter)) {
         return false;
       }
       return true;
@@ -5979,7 +6673,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   }
 
   Widget _adminRoomManagementFilters() {
-    final hasFilters = _adminManagedRoomFilter != 'all' ||
+    final hasFilters =
+        _adminManagedRoomFilter != 'all' ||
         _adminManagedBuildingFilter != 'all';
 
     return Container(
@@ -6003,10 +6698,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               decoration: _inputDecoration('All Rooms'),
               isExpanded: true,
               items: [
-                const DropdownMenuItem(
-                  value: 'all',
-                  child: Text('All Rooms'),
-                ),
+                const DropdownMenuItem(value: 'all', child: Text('All Rooms')),
                 ..._rooms.map(
                   (room) => DropdownMenuItem(
                     value: room.id,
@@ -6014,9 +6706,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   ),
                 ),
               ],
-              onChanged: (value) => setState(
-                () => _adminManagedRoomFilter = value ?? 'all',
-              ),
+              onChanged: (value) =>
+                  setState(() => _adminManagedRoomFilter = value ?? 'all'),
             ),
             width: 220,
           ),
@@ -6039,9 +6730,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   ),
                 ),
               ],
-              onChanged: (value) => setState(
-                () => _adminManagedBuildingFilter = value ?? 'all',
-              ),
+              onChanged: (value) =>
+                  setState(() => _adminManagedBuildingFilter = value ?? 'all'),
             ),
             width: 200,
           ),
@@ -6053,8 +6743,10 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               }),
               borderRadius: BorderRadius.circular(10),
               child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 11,
+                ),
                 decoration: BoxDecoration(
                   color: AppPalette.warn.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(10),
@@ -6099,11 +6791,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 'Add rooms to start seat-based booking.',
               )
             : filteredRooms.isEmpty
-                ? _emptyState(
-                    'No rooms match these filters',
-                    'Clear filters or choose another room/building.',
-                  )
-                : _roomGrid(filteredRooms, adminMode: true),
+            ? _emptyState(
+                'No rooms match these filters',
+                'Clear filters or choose another room/building.',
+              )
+            : _roomGrid(filteredRooms, adminMode: true),
       ],
     );
   }
@@ -6118,10 +6810,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         ),
         SizedBox(
           width: 200,
-          child: _gradientButton(
-            '＋ Add New Event',
-            () => _showEventDialog(),
-          ),
+          child: _gradientButton('＋ Add New Event', () => _showEventDialog()),
         ),
         const SizedBox(height: 20),
         _events.isEmpty
@@ -6133,7 +6822,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 itemCount: _events.length,
-                separatorBuilder: (context, index) => const SizedBox(height: 16),
+                separatorBuilder: (context, index) =>
+                    const SizedBox(height: 16),
                 itemBuilder: (context, index) {
                   final event = _events[index];
                   return _adminEventCard(event);
@@ -6155,22 +6845,35 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               Expanded(
                 child: Text(
                   event.name,
-                  style: _body(size: 16, weight: FontWeight.bold, color: AppPalette.text),
+                  style: _body(
+                    size: 16,
+                    weight: FontWeight.bold,
+                    color: AppPalette.text,
+                  ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
               const SizedBox(width: 8),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 5,
+                ),
                 decoration: BoxDecoration(
                   color: AppPalette.accent.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: AppPalette.accent.withOpacity(0.30)),
+                  border: Border.all(
+                    color: AppPalette.accent.withOpacity(0.30),
+                  ),
                 ),
                 child: Text(
                   'Event',
-                  style: _body(size: 11, color: AppPalette.accent, weight: FontWeight.w700),
+                  style: _body(
+                    size: 11,
+                    color: AppPalette.accent,
+                    weight: FontWeight.w700,
+                  ),
                 ),
               ),
             ],
@@ -6198,23 +6901,40 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
               IconButton(
-                icon: const Icon(Icons.edit_rounded, color: AppPalette.accent, size: 20),
+                icon: const Icon(
+                  Icons.edit_rounded,
+                  color: AppPalette.accent,
+                  size: 20,
+                ),
                 onPressed: () => _showEventDialog(event: event),
                 tooltip: 'Edit Event',
               ),
               IconButton(
-                icon: const Icon(Icons.delete_outline_rounded, color: AppPalette.danger, size: 20),
+                icon: const Icon(
+                  Icons.delete_outline_rounded,
+                  color: AppPalette.danger,
+                  size: 20,
+                ),
                 onPressed: () {
                   showDialog<void>(
                     context: context,
                     builder: (ctx) => AlertDialog(
                       backgroundColor: AppPalette.surface,
-                      title: Text('Delete Event', style: _body(size: 16, weight: FontWeight.bold)),
-                      content: Text('Are you sure you want to delete this event? This action cannot be undone.', style: _body(size: 14)),
+                      title: Text(
+                        'Delete Event',
+                        style: _body(size: 16, weight: FontWeight.bold),
+                      ),
+                      content: Text(
+                        'Are you sure you want to delete this event? This action cannot be undone.',
+                        style: _body(size: 14),
+                      ),
                       actions: [
                         TextButton(
                           onPressed: () => Navigator.of(ctx).pop(),
-                          child: Text('Cancel', style: _body(color: AppPalette.text2)),
+                          child: Text(
+                            'Cancel',
+                            style: _body(color: AppPalette.text2),
+                          ),
                         ),
                         TextButton(
                           onPressed: () {
@@ -6224,7 +6944,13 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                               '🗑️ Event deleted successfully',
                             );
                           },
-                          child: Text('Delete', style: _body(color: AppPalette.danger, weight: FontWeight.bold)),
+                          child: Text(
+                            'Delete',
+                            style: _body(
+                              color: AppPalette.danger,
+                              weight: FontWeight.bold,
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -6262,7 +6988,9 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     final place = TextEditingController(text: event?.place ?? '');
     final duration = TextEditingController(text: event?.duration ?? '');
     final guests = TextEditingController(text: event?.guests ?? '');
-    DateTime selectedDate = event != null ? DateTime.tryParse(event.date) ?? DateTime.now() : DateTime.now();
+    DateTime selectedDate = event != null
+        ? DateTime.tryParse(event.date) ?? DateTime.now()
+        : DateTime.now();
 
     await showDialog<void>(
       context: context,
@@ -6289,7 +7017,9 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                       controller: description,
                       maxLines: 3,
                       style: _body(size: 14),
-                      decoration: _inputDecoration('e.g. Details about the convocation program...'),
+                      decoration: _inputDecoration(
+                        'e.g. Details about the convocation program...',
+                      ),
                     ),
                     const SizedBox(height: 12),
                     Row(
@@ -6304,8 +7034,12 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                                   final picked = await showDatePicker(
                                     context: context,
                                     initialDate: selectedDate,
-                                    firstDate: DateTime.now().subtract(const Duration(days: 30)),
-                                    lastDate: DateTime.now().add(const Duration(days: 365)),
+                                    firstDate: DateTime.now().subtract(
+                                      const Duration(days: 30),
+                                    ),
+                                    lastDate: DateTime.now().add(
+                                      const Duration(days: 365),
+                                    ),
                                     builder: (context, child) => Theme(
                                       data: ThemeData.dark().copyWith(
                                         colorScheme: const ColorScheme.dark(
@@ -6321,20 +7055,30 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                                   }
                                 },
                                 child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 13,
+                                  ),
                                   decoration: BoxDecoration(
                                     color: AppPalette.surface2,
                                     borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: AppPalette.border),
+                                    border: Border.all(
+                                      color: AppPalette.border,
+                                    ),
                                   ),
                                   child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
                                     children: [
                                       Text(
                                         _dateDisplay(_isoDate(selectedDate)),
                                         style: _body(size: 14),
                                       ),
-                                      const Icon(Icons.calendar_today_rounded, size: 16, color: AppPalette.text2),
+                                      const Icon(
+                                        Icons.calendar_today_rounded,
+                                        size: 16,
+                                        color: AppPalette.text2,
+                                      ),
                                     ],
                                   ),
                                 ),
@@ -6371,7 +7115,9 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               ),
               TextButton(
                 onPressed: () {
-                  if (name.text.trim().isEmpty || place.text.trim().isEmpty || duration.text.trim().isEmpty) {
+                  if (name.text.trim().isEmpty ||
+                      place.text.trim().isEmpty ||
+                      duration.text.trim().isEmpty) {
                     _showToast('⚠️ Please fill all required fields');
                     return;
                   }
@@ -6405,7 +7151,10 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 },
                 child: Text(
                   event == null ? 'Add Event' : 'Save Changes',
-                  style: _body(color: AppPalette.accent, weight: FontWeight.bold),
+                  style: _body(
+                    color: AppPalette.accent,
+                    weight: FontWeight.bold,
+                  ),
                 ),
               ),
             ],
@@ -6421,8 +7170,10 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     // Compute counts for summary bar
     int activeCount = 0, cancelledCount = 0;
     for (final s in schedules) {
-      if (s.status == 'active') activeCount++;
-      else if (s.status == 'cancelled') cancelledCount++;
+      if (s.status == 'active')
+        activeCount++;
+      else if (s.status == 'cancelled')
+        cancelledCount++;
     }
 
     return Column(
@@ -6434,8 +7185,12 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
             gradient: LinearGradient(
-              colors: [AppPalette.accent.withOpacity(0.15), AppPalette.accent2.withOpacity(0.10)],
-              begin: Alignment.topLeft, end: Alignment.bottomRight,
+              colors: [
+                AppPalette.accent.withOpacity(0.15),
+                AppPalette.accent2.withOpacity(0.10),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
             ),
             borderRadius: BorderRadius.circular(20),
             border: Border.all(color: AppPalette.accent.withOpacity(0.20)),
@@ -6446,32 +7201,60 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(colors: [AppPalette.accent, AppPalette.accent2], begin: Alignment.topLeft, end: Alignment.bottomRight),
+                  gradient: const LinearGradient(
+                    colors: [AppPalette.accent, AppPalette.accent2],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
                   borderRadius: BorderRadius.circular(14),
                 ),
-                child: const Icon(Icons.monitor_heart_rounded, color: Colors.white, size: 22),
+                child: const Icon(
+                  Icons.monitor_heart_rounded,
+                  color: Colors.white,
+                  size: 22,
+                ),
               ),
               const SizedBox(width: 16),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Booking Monitor', style: _body(size: 20, weight: FontWeight.w800)),
+                    Text(
+                      'Booking Monitor',
+                      style: _body(size: 20, weight: FontWeight.w800),
+                    ),
                     const SizedBox(height: 4),
-                    Text('Monitor teacher room bookings, conflicts, date filters, and slot availability',
-                      style: _body(size: 12, color: AppPalette.text2, height: 1.4)),
+                    Text(
+                      'Monitor teacher room bookings, conflicts, date filters, and slot availability',
+                      style: _body(
+                        size: 12,
+                        color: AppPalette.text2,
+                        height: 1.4,
+                      ),
+                    ),
                   ],
                 ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   color: AppPalette.accent.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: AppPalette.accent.withOpacity(0.30)),
+                  border: Border.all(
+                    color: AppPalette.accent.withOpacity(0.30),
+                  ),
                 ),
-                child: Text('${schedules.length} schedule${schedules.length == 1 ? '' : 's'}',
-                  style: _body(size: 12, color: AppPalette.accent, weight: FontWeight.w700)),
+                child: Text(
+                  '${schedules.length} schedule${schedules.length == 1 ? '' : 's'}',
+                  style: _body(
+                    size: 12,
+                    color: AppPalette.accent,
+                    weight: FontWeight.w700,
+                  ),
+                ),
               ),
             ],
           ),
@@ -6498,7 +7281,10 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
 
         // ── Weekly Schedule Cards ─────────────────────────────────────
         schedules.isEmpty
-            ? _emptyState('No teacher weekly schedules found', 'Assign a teacher from Room Management or clear filters.')
+            ? _emptyState(
+                'No teacher weekly schedules found',
+                'Assign a teacher from Room Management or clear filters.',
+              )
             : _adminBookingCards(schedules),
       ],
     );
@@ -6515,9 +7301,16 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Container(width: 7, height: 7, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+          Container(
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
           const SizedBox(width: 7),
-          Text('$count $label', style: _body(size: 12, color: color, weight: FontWeight.w700)),
+          Text(
+            '$count $label',
+            style: _body(size: 12, color: color, weight: FontWeight.w700),
+          ),
         ],
       ),
     );
@@ -6551,8 +7344,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               ),
               boxShadow: [
                 BoxShadow(
-                  color: isActive ? AppPalette.accent.withOpacity(0.06) : Colors.black.withOpacity(0.08),
-                  blurRadius: 12, offset: const Offset(0, 4),
+                  color: isActive
+                      ? AppPalette.accent.withOpacity(0.06)
+                      : Colors.black.withOpacity(0.08),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
                 ),
               ],
             ),
@@ -6570,23 +7366,40 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(s.teacherName, style: _body(size: 14, weight: FontWeight.w700), overflow: TextOverflow.ellipsis),
+                            Text(
+                              s.teacherName,
+                              style: _body(size: 14, weight: FontWeight.w700),
+                              overflow: TextOverflow.ellipsis,
+                            ),
                             const SizedBox(height: 2),
-                            Text(s.roomName, style: _body(size: 12, color: AppPalette.accent), overflow: TextOverflow.ellipsis),
+                            Text(
+                              s.roomName,
+                              style: _body(size: 12, color: AppPalette.accent),
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ],
                         ),
                       ),
                       // Status badge
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
                         decoration: BoxDecoration(
                           color: statusColor.withOpacity(0.12),
                           borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: statusColor.withOpacity(0.30)),
+                          border: Border.all(
+                            color: statusColor.withOpacity(0.30),
+                          ),
                         ),
                         child: Text(
                           '$statusIcon ${isActive ? "Active" : "Cancelled"}',
-                          style: _body(size: 11, color: statusColor, weight: FontWeight.w700),
+                          style: _body(
+                            size: 11,
+                            color: statusColor,
+                            weight: FontWeight.w700,
+                          ),
                         ),
                       ),
                     ],
@@ -6594,16 +7407,25 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   const SizedBox(height: 12),
                   // Details row
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
                     decoration: BoxDecoration(
                       color: AppPalette.surface2,
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Row(
                       children: [
-                        _bookingDetailItem(Icons.meeting_room_outlined, s.roomLocation),
+                        _bookingDetailItem(
+                          Icons.meeting_room_outlined,
+                          s.roomLocation,
+                        ),
                         _bookingDetailDivider(),
-                        _bookingDetailItem(Icons.calendar_today_outlined, '${s.fullDayLabel} (Next: ${s.nextDateDisplay})'),
+                        _bookingDetailItem(
+                          Icons.calendar_today_outlined,
+                          '${s.fullDayLabel} (Next: ${s.nextDateDisplay})',
+                        ),
                         _bookingDetailDivider(),
                         _bookingDetailItem(Icons.schedule_outlined, s.timeSlot),
                       ],
@@ -6621,18 +7443,34 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                         ),
                         borderRadius: BorderRadius.circular(8),
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 7,
+                          ),
                           decoration: BoxDecoration(
                             color: AppPalette.danger.withOpacity(0.10),
                             borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: AppPalette.danger.withOpacity(0.30)),
+                            border: Border.all(
+                              color: AppPalette.danger.withOpacity(0.30),
+                            ),
                           ),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(Icons.cancel_outlined, color: AppPalette.danger, size: 15),
+                              Icon(
+                                Icons.cancel_outlined,
+                                color: AppPalette.danger,
+                                size: 15,
+                              ),
                               const SizedBox(width: 6),
-                              Text('Cancel Schedule', style: _body(size: 12, color: AppPalette.danger, weight: FontWeight.w700)),
+                              Text(
+                                'Cancel Schedule',
+                                style: _body(
+                                  size: 12,
+                                  color: AppPalette.danger,
+                                  weight: FontWeight.w700,
+                                ),
+                              ),
                             ],
                           ),
                         ),
@@ -6653,16 +7491,23 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       children: [
         Icon(icon, size: 13, color: AppPalette.text2),
         const SizedBox(width: 5),
-        Expanded(child: Text(text, style: _body(size: 11, color: AppPalette.text2), overflow: TextOverflow.ellipsis)),
+        Expanded(
+          child: Text(
+            text,
+            style: _body(size: 11, color: AppPalette.text2),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
       ],
     ),
   );
 
   Widget _bookingDetailDivider() => Container(
-    width: 1, height: 16, margin: const EdgeInsets.symmetric(horizontal: 8),
+    width: 1,
+    height: 16,
+    margin: const EdgeInsets.symmetric(horizontal: 8),
     color: AppPalette.border,
   );
-
 
   Widget _bookingTable(
     List<BookingInfo> bookings, {
@@ -6677,8 +7522,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       flexes: const [2, 2, 2, 1, 1],
       rows: bookings.map((b) {
         final studentCancellable = studentActions && _bookingIsUpcoming(b);
-        final teacherCancellable = b.canRequestTeacherCancellation && !_bookingIsCompleted(b);
-        final statusText = (studentActions || teacherActions) ? _bookingCurrentStatus(b) : b.status;
+        final teacherCancellable =
+            b.canRequestTeacherCancellation && !_bookingIsCompleted(b);
+        final statusText = (studentActions || teacherActions)
+            ? _bookingCurrentStatus(b)
+            : b.status;
 
         if (adminActions) {
           return [
@@ -6765,16 +7613,25 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   }
 
   Widget _adminBookingFilters() {
-    final hasFilters = _adminTeacherFilter != 'all' || _adminRoomFilter != 'all'
-        || _adminBuildingFilter != 'all'
-        || _adminSlotFilter != 'all' || _adminDayFilter != 'all';
+    final hasFilters =
+        _adminTeacherFilter != 'all' ||
+        _adminRoomFilter != 'all' ||
+        _adminBuildingFilter != 'all' ||
+        _adminSlotFilter != 'all' ||
+        _adminDayFilter != 'all';
 
     return Container(
       decoration: BoxDecoration(
         color: AppPalette.surface,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: AppPalette.border),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 12, offset: const Offset(0, 4))],
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -6784,14 +7641,27 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
               color: AppPalette.surface2,
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(16),
+              ),
               border: Border(bottom: BorderSide(color: AppPalette.border)),
             ),
             child: Row(
               children: [
-                Icon(Icons.filter_list_rounded, size: 16, color: AppPalette.accent),
+                Icon(
+                  Icons.filter_list_rounded,
+                  size: 16,
+                  color: AppPalette.accent,
+                ),
                 const SizedBox(width: 8),
-                Text('Filters', style: _body(size: 13, weight: FontWeight.w700, color: AppPalette.text)),
+                Text(
+                  'Filters',
+                  style: _body(
+                    size: 13,
+                    weight: FontWeight.w700,
+                    color: AppPalette.text,
+                  ),
+                ),
                 const Spacer(),
                 if (hasFilters)
                   InkWell(
@@ -6804,17 +7674,36 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                     }),
                     borderRadius: BorderRadius.circular(8),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 5,
+                      ),
                       decoration: BoxDecoration(
                         color: AppPalette.warn.withOpacity(0.12),
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: AppPalette.warn.withOpacity(0.30)),
+                        border: Border.all(
+                          color: AppPalette.warn.withOpacity(0.30),
+                        ),
                       ),
-                      child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        Icon(Icons.close_rounded, size: 13, color: AppPalette.warn),
-                        const SizedBox(width: 4),
-                        Text('Clear', style: _body(size: 11, color: AppPalette.warn, weight: FontWeight.w700)),
-                      ]),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.close_rounded,
+                            size: 13,
+                            color: AppPalette.warn,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Clear',
+                            style: _body(
+                              size: 11,
+                              color: AppPalette.warn,
+                              weight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
               ],
@@ -6836,13 +7725,22 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                     decoration: _inputDecoration('All Teachers'),
                     isExpanded: true,
                     items: [
-                      const DropdownMenuItem(value: 'all', child: Text('All Teachers')),
-                      ..._teachers.map((t) => DropdownMenuItem(
-                        value: t.id,
-                        child: Text('${t.fullName} • ${t.email}', overflow: TextOverflow.ellipsis),
-                      )),
+                      const DropdownMenuItem(
+                        value: 'all',
+                        child: Text('All Teachers'),
+                      ),
+                      ..._teachers.map(
+                        (t) => DropdownMenuItem(
+                          value: t.id,
+                          child: Text(
+                            '${t.fullName} • ${t.email}',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
                     ],
-                    onChanged: (v) => setState(() => _adminTeacherFilter = v ?? 'all'),
+                    onChanged: (v) =>
+                        setState(() => _adminTeacherFilter = v ?? 'all'),
                   ),
                   width: 240,
                 ),
@@ -6855,13 +7753,19 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                     decoration: _inputDecoration('All Rooms'),
                     isExpanded: true,
                     items: [
-                      const DropdownMenuItem(value: 'all', child: Text('All Rooms')),
-                      ..._rooms.map((r) => DropdownMenuItem(
-                        value: r.id,
-                        child: Text(r.name, overflow: TextOverflow.ellipsis),
-                      )),
+                      const DropdownMenuItem(
+                        value: 'all',
+                        child: Text('All Rooms'),
+                      ),
+                      ..._rooms.map(
+                        (r) => DropdownMenuItem(
+                          value: r.id,
+                          child: Text(r.name, overflow: TextOverflow.ellipsis),
+                        ),
+                      ),
                     ],
-                    onChanged: (v) => setState(() => _adminRoomFilter = v ?? 'all'),
+                    onChanged: (v) =>
+                        setState(() => _adminRoomFilter = v ?? 'all'),
                   ),
                   width: 200,
                 ),
@@ -6878,18 +7782,18 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                         value: 'all',
                         child: Text('All Buildings'),
                       ),
-                      ..._buildingFilterOptions.map((building) =>
-                          DropdownMenuItem(
-                            value: building,
-                            child: Text(
-                              building,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          )),
+                      ..._buildingFilterOptions.map(
+                        (building) => DropdownMenuItem(
+                          value: building,
+                          child: Text(
+                            building,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
                     ],
-                    onChanged: (v) => setState(
-                      () => _adminBuildingFilter = v ?? 'all',
-                    ),
+                    onChanged: (v) =>
+                        setState(() => _adminBuildingFilter = v ?? 'all'),
                   ),
                   width: 190,
                 ),
@@ -6902,16 +7806,32 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                     decoration: _inputDecoration('All Days'),
                     isExpanded: true,
                     items: [
-                      const DropdownMenuItem(value: 'all', child: Text('All Days')),
+                      const DropdownMenuItem(
+                        value: 'all',
+                        child: Text('All Days'),
+                      ),
                       const DropdownMenuItem(value: '0', child: Text('Sunday')),
                       const DropdownMenuItem(value: '1', child: Text('Monday')),
-                      const DropdownMenuItem(value: '2', child: Text('Tuesday')),
-                      const DropdownMenuItem(value: '3', child: Text('Wednesday')),
-                      const DropdownMenuItem(value: '4', child: Text('Thursday')),
+                      const DropdownMenuItem(
+                        value: '2',
+                        child: Text('Tuesday'),
+                      ),
+                      const DropdownMenuItem(
+                        value: '3',
+                        child: Text('Wednesday'),
+                      ),
+                      const DropdownMenuItem(
+                        value: '4',
+                        child: Text('Thursday'),
+                      ),
                       const DropdownMenuItem(value: '5', child: Text('Friday')),
-                      const DropdownMenuItem(value: '6', child: Text('Saturday')),
+                      const DropdownMenuItem(
+                        value: '6',
+                        child: Text('Saturday'),
+                      ),
                     ],
-                    onChanged: (v) => setState(() => _adminDayFilter = v ?? 'all'),
+                    onChanged: (v) =>
+                        setState(() => _adminDayFilter = v ?? 'all'),
                   ),
                   width: 180,
                 ),
@@ -6924,13 +7844,19 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                     decoration: _inputDecoration('All Slots'),
                     isExpanded: true,
                     items: [
-                      const DropdownMenuItem(value: 'all', child: Text('All Slots')),
-                      ...fixedTeacherSlots.entries.map((e) => DropdownMenuItem(
-                        value: e.key,
-                        child: Text(e.value, overflow: TextOverflow.ellipsis),
-                      )),
+                      const DropdownMenuItem(
+                        value: 'all',
+                        child: Text('All Slots'),
+                      ),
+                      ...fixedTeacherSlots.entries.map(
+                        (e) => DropdownMenuItem(
+                          value: e.key,
+                          child: Text(e.value, overflow: TextOverflow.ellipsis),
+                        ),
+                      ),
                     ],
-                    onChanged: (v) => setState(() => _adminSlotFilter = v ?? 'all'),
+                    onChanged: (v) =>
+                        setState(() => _adminSlotFilter = v ?? 'all'),
                   ),
                   width: 220,
                 ),
@@ -6942,7 +7868,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     );
   }
 
-  Widget _filterField({required String label, required Widget child, required double width}) {
+  Widget _filterField({
+    required String label,
+    required Widget child,
+    required double width,
+  }) {
     return SizedBox(
       width: width,
       child: Column(
@@ -6950,14 +7880,20 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         children: [
           Padding(
             padding: const EdgeInsets.only(left: 2, bottom: 5),
-            child: Text(label, style: _body(size: 11, color: AppPalette.text2, weight: FontWeight.w600)),
+            child: Text(
+              label,
+              style: _body(
+                size: 11,
+                color: AppPalette.text2,
+                weight: FontWeight.w600,
+              ),
+            ),
           ),
           child,
         ],
       ),
     );
   }
-
 
   Widget _userTable() {
     return _tableCard(
@@ -7127,8 +8063,10 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                                     children: slots.map((slot) {
                                       final selected =
                                           selectedSlot == slot.slotKey;
-                                      final ended =
-                                          _slotHasEnded(selectedDate, slot);
+                                      final ended = _slotHasEnded(
+                                        selectedDate,
+                                        slot,
+                                      );
                                       final selectable =
                                           !ended &&
                                           (isTeacher
@@ -7160,7 +8098,9 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                         },
                       ),
                       const SizedBox(height: 16),
-                      _fieldLabel(isTeacher ? 'Purpose / Class Details' : 'Purpose'),
+                      _fieldLabel(
+                        isTeacher ? 'Purpose / Class Details' : 'Purpose',
+                      ),
                       _textInput(
                         purposeController,
                         'e.g. DSA group study, exam prep…',
@@ -7176,52 +8116,49 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                           ),
                           const SizedBox(width: 10),
                           Expanded(
-                            child: _gradientButton(
-                              'Confirm Booking ✓',
-                              () async {
-                                if (selectedSlot == null) {
-                                  _showToast(
-                                    '⚠️ Select an available time slot first.',
+                            child: _gradientButton('Confirm Booking ✓', () async {
+                              if (selectedSlot == null) {
+                                _showToast(
+                                  '⚠️ Select an available time slot first.',
+                                );
+                                return;
+                              }
+                              final parts = selectedSlot!.split('|');
+                              Navigator.of(context).pop();
+                              try {
+                                final purpose =
+                                    purposeController.text.trim().isEmpty
+                                    ? (isTeacher
+                                          ? 'Teacher room booking'
+                                          : 'Study')
+                                    : purposeController.text.trim();
+                                if (isTeacher) {
+                                  await _repo.bookTeacherRoomSlot(
+                                    roomId: room.id,
+                                    date: selectedDate,
+                                    startTime: parts[0],
+                                    endTime: parts[1],
+                                    purpose: purpose,
                                   );
-                                  return;
+                                  await _loadAll(silent: true);
+                                  _showToast(
+                                    'Room slot booked. Students in this slot were notified if cancelled.',
+                                  );
+                                } else {
+                                  final slip = await _repo.bookSeat(
+                                    roomId: room.id,
+                                    date: selectedDate,
+                                    startTime: parts[0],
+                                    endTime: parts[1],
+                                    purpose: purpose,
+                                  );
+                                  await _loadAll(silent: true);
+                                  if (mounted) _showBookingSlip(slip);
                                 }
-                                final parts = selectedSlot!.split('|');
-                                Navigator.of(context).pop();
-                                try {
-                                  final purpose =
-                                      purposeController.text.trim().isEmpty
-                                      ? (isTeacher
-                                            ? 'Teacher room booking'
-                                            : 'Study')
-                                      : purposeController.text.trim();
-                                  if (isTeacher) {
-                                    await _repo.bookTeacherRoomSlot(
-                                      roomId: room.id,
-                                      date: selectedDate,
-                                      startTime: parts[0],
-                                      endTime: parts[1],
-                                      purpose: purpose,
-                                    );
-                                    await _loadAll(silent: true);
-                                    _showToast(
-                                      'Room slot booked. Students in this slot were notified if cancelled.',
-                                    );
-                                  } else {
-                                    final slip = await _repo.bookSeat(
-                                      roomId: room.id,
-                                      date: selectedDate,
-                                      startTime: parts[0],
-                                      endTime: parts[1],
-                                      purpose: purpose,
-                                    );
-                                    await _loadAll(silent: true);
-                                    if (mounted) _showBookingSlip(slip);
-                                  }
-                                } catch (e) {
-                                  _showToast('⚠️ ${_friendlyError(e)}');
-                                }
-                              },
-                            ),
+                              } catch (e) {
+                                _showToast('⚠️ ${_friendlyError(e)}');
+                              }
+                            }),
                           ),
                         ],
                       ),
@@ -7348,8 +8285,6 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       ],
     ),
   );
-
-
 
   Future<void> _showCreateGroupDialog() async {
     final name = TextEditingController();
@@ -8605,8 +9540,9 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                     decoration: BoxDecoration(
                       color: AppPalette.warn.withOpacity(0.10),
                       borderRadius: BorderRadius.circular(10),
-                      border:
-                          Border.all(color: AppPalette.warn.withOpacity(0.30)),
+                      border: Border.all(
+                        color: AppPalette.warn.withOpacity(0.30),
+                      ),
                     ),
                     child: Text(
                       'Admin accounts cannot be deleted from this screen.',
@@ -8691,7 +9627,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 color: AppPalette.danger.withOpacity(0.12),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Icon(Icons.warning_amber_rounded, color: AppPalette.danger, size: 22),
+              child: Icon(
+                Icons.warning_amber_rounded,
+                color: AppPalette.danger,
+                size: 22,
+              ),
             ),
             const SizedBox(width: 12),
             Text(
@@ -8726,8 +9666,14 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(user.fullName, style: _body(size: 14, weight: FontWeight.w700)),
-                          Text(user.email, style: _body(size: 12, color: AppPalette.text2)),
+                          Text(
+                            user.fullName,
+                            style: _body(size: 14, weight: FontWeight.w700),
+                          ),
+                          Text(
+                            user.email,
+                            style: _body(size: 12, color: AppPalette.text2),
+                          ),
                           const SizedBox(height: 4),
                           _roleTag(user.role.label, _roleColor(user.role)),
                         ],
@@ -8742,16 +9688,26 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 decoration: BoxDecoration(
                   color: AppPalette.danger.withOpacity(0.08),
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: AppPalette.danger.withOpacity(0.20)),
+                  border: Border.all(
+                    color: AppPalette.danger.withOpacity(0.20),
+                  ),
                 ),
                 child: Row(
                   children: [
-                    Icon(Icons.info_outline_rounded, color: AppPalette.danger, size: 16),
+                    Icon(
+                      Icons.info_outline_rounded,
+                      color: AppPalette.danger,
+                      size: 16,
+                    ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         'This action will delete the user profile, all their bookings, and notifications. This cannot be undone.',
-                        style: _body(size: 11, color: AppPalette.danger, height: 1.4),
+                        style: _body(
+                          size: 11,
+                          color: AppPalette.danger,
+                          height: 1.4,
+                        ),
                       ),
                     ),
                   ],
@@ -8773,7 +9729,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               ),
               child: Text(
                 'Delete',
-                style: _body(size: 13, color: Colors.white, weight: FontWeight.w800),
+                style: _body(
+                  size: 13,
+                  color: Colors.white,
+                  weight: FontWeight.w800,
+                ),
               ),
             ),
           ),
@@ -8793,7 +9753,9 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       return _responsiveGrid(
         minTileWidth: 280,
         aspectRatio: 0.92,
-        children: rooms.map((room) => _roomCard(room, adminMode: false)).toList(),
+        children: rooms
+            .map((room) => _roomCard(room, adminMode: false))
+            .toList(),
         bottom: 28,
       );
     }
@@ -8808,7 +9770,9 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             child: Column(
               children: rooms.asMap().entries.map((e) {
                 return Padding(
-                  padding: EdgeInsets.only(bottom: e.key < rooms.length - 1 ? 12 : 0),
+                  padding: EdgeInsets.only(
+                    bottom: e.key < rooms.length - 1 ? 12 : 0,
+                  ),
                   child: _adminRoomListCard(e.value),
                 );
               }).toList(),
@@ -8822,10 +9786,14 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
           child: Wrap(
             spacing: 12,
             runSpacing: 12,
-            children: rooms.map((room) => SizedBox(
-              width: colWidth,
-              child: _adminRoomCompactCard(room),
-            )).toList(),
+            children: rooms
+                .map(
+                  (room) => SizedBox(
+                    width: colWidth,
+                    child: _adminRoomCompactCard(room),
+                  ),
+                )
+                .toList(),
           ),
         );
       },
@@ -8840,7 +9808,13 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         color: AppPalette.surface,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: AppPalette.border),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.07), blurRadius: 10, offset: const Offset(0, 3))],
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.07),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
@@ -8851,10 +9825,16 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               width: 52,
               height: 52,
               decoration: BoxDecoration(
-                gradient: LinearGradient(colors: room.colors, begin: Alignment.topLeft, end: Alignment.bottomRight),
+                gradient: LinearGradient(
+                  colors: room.colors,
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
                 borderRadius: BorderRadius.circular(14),
               ),
-              child: Center(child: Text(room.icon, style: const TextStyle(fontSize: 26))),
+              child: Center(
+                child: Text(room.icon, style: const TextStyle(fontSize: 26)),
+              ),
             ),
             const SizedBox(width: 16),
             // Room info
@@ -8862,21 +9842,42 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(room.name, style: _body(size: 15, weight: FontWeight.w800), overflow: TextOverflow.ellipsis),
+                  Text(
+                    room.name,
+                    style: _body(size: 15, weight: FontWeight.w800),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                   const SizedBox(height: 4),
                   Row(
                     children: [
-                      Icon(Icons.location_on_outlined, size: 13, color: AppPalette.text2),
+                      Icon(
+                        Icons.location_on_outlined,
+                        size: 13,
+                        color: AppPalette.text2,
+                      ),
                       const SizedBox(width: 3),
-                      Expanded(child: Text(room.location, style: _body(size: 12, color: AppPalette.text2), overflow: TextOverflow.ellipsis)),
+                      Expanded(
+                        child: Text(
+                          room.location,
+                          style: _body(size: 12, color: AppPalette.text2),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 3),
                   Row(
                     children: [
-                      Icon(Icons.event_seat_rounded, size: 13, color: AppPalette.text2),
+                      Icon(
+                        Icons.event_seat_rounded,
+                        size: 13,
+                        color: AppPalette.text2,
+                      ),
                       const SizedBox(width: 3),
-                      Text('Capacity: ${room.capacity}', style: _body(size: 12, color: AppPalette.text2)),
+                      Text(
+                        'Capacity: ${room.capacity}',
+                        style: _body(size: 12, color: AppPalette.text2),
+                      ),
                     ],
                   ),
                 ],
@@ -8891,7 +9892,14 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(color: statusColor.withOpacity(0.30)),
               ),
-              child: Text('● Slot Based', style: _body(size: 11, color: statusColor, weight: FontWeight.w700)),
+              child: Text(
+                '● Slot Based',
+                style: _body(
+                  size: 11,
+                  color: statusColor,
+                  weight: FontWeight.w700,
+                ),
+              ),
             ),
             const SizedBox(width: 12),
             // Action buttons
@@ -8899,17 +9907,36 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               onTap: () => _showRoomDialog(room: room),
               borderRadius: BorderRadius.circular(10),
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 9,
+                ),
                 decoration: BoxDecoration(
                   color: AppPalette.accent.withOpacity(0.10),
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: AppPalette.accent.withOpacity(0.30)),
+                  border: Border.all(
+                    color: AppPalette.accent.withOpacity(0.30),
+                  ),
                 ),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(Icons.edit_rounded, size: 14, color: AppPalette.accent),
-                  const SizedBox(width: 6),
-                  Text('Edit', style: _body(size: 12, color: AppPalette.accent, weight: FontWeight.w700)),
-                ]),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.edit_rounded,
+                      size: 14,
+                      color: AppPalette.accent,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Edit',
+                      style: _body(
+                        size: 12,
+                        color: AppPalette.accent,
+                        weight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
             const SizedBox(width: 8),
@@ -8917,17 +9944,36 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               onTap: () => _confirmAndDeleteRoom(room),
               borderRadius: BorderRadius.circular(10),
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 9,
+                ),
                 decoration: BoxDecoration(
                   color: AppPalette.danger.withOpacity(0.10),
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: AppPalette.danger.withOpacity(0.30)),
+                  border: Border.all(
+                    color: AppPalette.danger.withOpacity(0.30),
+                  ),
                 ),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(Icons.delete_outline_rounded, size: 14, color: AppPalette.danger),
-                  const SizedBox(width: 6),
-                  Text('Delete', style: _body(size: 12, color: AppPalette.danger, weight: FontWeight.w700)),
-                ]),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.delete_outline_rounded,
+                      size: 14,
+                      color: AppPalette.danger,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Delete',
+                      style: _body(
+                        size: 12,
+                        color: AppPalette.danger,
+                        weight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ],
@@ -8944,7 +9990,13 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         color: AppPalette.surface,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: AppPalette.border),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.07), blurRadius: 10, offset: const Offset(0, 3))],
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.07),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -8953,18 +10005,40 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
           Container(
             height: 72,
             decoration: BoxDecoration(
-              gradient: LinearGradient(colors: room.colors, begin: Alignment.topLeft, end: Alignment.bottomRight),
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+              gradient: LinearGradient(
+                colors: room.colors,
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(16),
+              ),
             ),
             child: Stack(
               children: [
-                Center(child: Text(room.icon, style: const TextStyle(fontSize: 28))),
+                Center(
+                  child: Text(room.icon, style: const TextStyle(fontSize: 28)),
+                ),
                 Positioned(
-                  top: 8, right: 8,
+                  top: 8,
+                  right: 8,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                    decoration: BoxDecoration(color: Colors.black.withOpacity(0.30), borderRadius: BorderRadius.circular(20)),
-                    child: Text('● Slot', style: _body(size: 9, color: statusColor, weight: FontWeight.w700)),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.30),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      '● Slot',
+                      style: _body(
+                        size: 9,
+                        color: statusColor,
+                        weight: FontWeight.w700,
+                      ),
+                    ),
                   ),
                 ),
               ],
@@ -8976,15 +10050,34 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(room.name, style: _body(size: 13, weight: FontWeight.w800), overflow: TextOverflow.ellipsis, maxLines: 1),
+                Text(
+                  room.name,
+                  style: _body(size: 13, weight: FontWeight.w800),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                ),
                 const SizedBox(height: 3),
-                Text(room.location, style: _body(size: 11, color: AppPalette.text2), overflow: TextOverflow.ellipsis, maxLines: 1),
+                Text(
+                  room.location,
+                  style: _body(size: 11, color: AppPalette.text2),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                ),
                 const SizedBox(height: 2),
-                Row(children: [
-                  Icon(Icons.event_seat_rounded, size: 11, color: AppPalette.text2),
-                  const SizedBox(width: 3),
-                  Text('${room.capacity} seats', style: _body(size: 11, color: AppPalette.text2)),
-                ]),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.event_seat_rounded,
+                      size: 11,
+                      color: AppPalette.text2,
+                    ),
+                    const SizedBox(width: 3),
+                    Text(
+                      '${room.capacity} seats',
+                      style: _body(size: 11, color: AppPalette.text2),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 10),
                 // Buttons stacked vertically for narrow columns
                 SizedBox(
@@ -8997,13 +10090,29 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                       decoration: BoxDecoration(
                         color: AppPalette.accent.withOpacity(0.10),
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: AppPalette.accent.withOpacity(0.30)),
+                        border: Border.all(
+                          color: AppPalette.accent.withOpacity(0.30),
+                        ),
                       ),
-                      child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                        Icon(Icons.edit_rounded, size: 13, color: AppPalette.accent),
-                        const SizedBox(width: 5),
-                        Text('Edit', style: _body(size: 12, color: AppPalette.accent, weight: FontWeight.w700)),
-                      ]),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.edit_rounded,
+                            size: 13,
+                            color: AppPalette.accent,
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            'Edit',
+                            style: _body(
+                              size: 12,
+                              color: AppPalette.accent,
+                              weight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -9018,13 +10127,29 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                       decoration: BoxDecoration(
                         color: AppPalette.danger.withOpacity(0.10),
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: AppPalette.danger.withOpacity(0.30)),
+                        border: Border.all(
+                          color: AppPalette.danger.withOpacity(0.30),
+                        ),
                       ),
-                      child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                        Icon(Icons.delete_outline_rounded, size: 13, color: AppPalette.danger),
-                        const SizedBox(width: 5),
-                        Text('Delete', style: _body(size: 12, color: AppPalette.danger, weight: FontWeight.w700)),
-                      ]),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.delete_outline_rounded,
+                            size: 13,
+                            color: AppPalette.danger,
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            'Delete',
+                            style: _body(
+                              size: 12,
+                              color: AppPalette.danger,
+                              weight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -9042,34 +10167,72 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppPalette.surface,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: AppPalette.border)),
-        title: Row(children: [
-          Container(padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(color: AppPalette.danger.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
-            child: Icon(Icons.warning_amber_rounded, color: AppPalette.danger, size: 20)),
-          const SizedBox(width: 10),
-          Expanded(child: Text('Delete Room', style: _body(size: 16, weight: FontWeight.w800))),
-        ]),
-        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Delete "${room.name}"?', style: _body(size: 14, weight: FontWeight.w700)),
-          const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: AppPalette.danger.withOpacity(0.08),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: AppPalette.danger.withOpacity(0.20)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: const BorderSide(color: AppPalette.border),
+        ),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppPalette.danger.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(
+                Icons.warning_amber_rounded,
+                color: AppPalette.danger,
+                size: 20,
+              ),
             ),
-            child: Row(children: [
-              Icon(Icons.info_outline_rounded, color: AppPalette.danger, size: 15),
-              const SizedBox(width: 8),
-              Expanded(child: Text(
-                'This will permanently delete the room and all its bookings. This cannot be undone.',
-                style: _body(size: 11, color: AppPalette.danger, height: 1.4),
-              )),
-            ]),
-          ),
-        ]),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Delete Room',
+                style: _body(size: 16, weight: FontWeight.w800),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Delete "${room.name}"?',
+              style: _body(size: 14, weight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppPalette.danger.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppPalette.danger.withOpacity(0.20)),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.info_outline_rounded,
+                    color: AppPalette.danger,
+                    size: 15,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'This will permanently delete the room and all its bookings. This cannot be undone.',
+                      style: _body(
+                        size: 11,
+                        color: AppPalette.danger,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
         actions: [
           _outlineButton('Cancel', () => Navigator.pop(ctx, false)),
           InkWell(
@@ -9077,14 +10240,25 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             borderRadius: BorderRadius.circular(10),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
-              decoration: BoxDecoration(color: AppPalette.danger, borderRadius: BorderRadius.circular(10)),
-              child: Text('Delete', style: _body(size: 13, color: Colors.white, weight: FontWeight.w800)),
+              decoration: BoxDecoration(
+                color: AppPalette.danger,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                'Delete',
+                style: _body(
+                  size: 13,
+                  color: Colors.white,
+                  weight: FontWeight.w800,
+                ),
+              ),
             ),
           ),
         ],
       ),
     );
-    if (ok == true) _runAction(() => _repo.deleteRoom(room.id), '🗑️ Room deleted!');
+    if (ok == true)
+      _runAction(() => _repo.deleteRoom(room.id), '🗑️ Room deleted!');
   }
 
   Widget _roomCard(RoomInfo room, {bool adminMode = false}) {
@@ -9301,8 +10475,6 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     );
   }
 
-
-
   Widget _groupCard(StudyGroupInfo group) {
     final isOpen = !group.isFull && group.status == 'active';
     return _SurfaceCard(
@@ -9480,12 +10652,12 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                                 minHeight: 6,
                                 value: group.maxMembers == 0
                                     ? 0
-                                    : (group.memberCount / group.maxMembers).clamp(
-                                        0.0,
-                                        1.0,
-                                      ),
+                                    : (group.memberCount / group.maxMembers)
+                                          .clamp(0.0, 1.0),
                                 backgroundColor: AppPalette.surface2,
-                                color: isOpen ? AppPalette.accent : AppPalette.warn,
+                                color: isOpen
+                                    ? AppPalette.accent
+                                    : AppPalette.warn,
                               ),
                             ),
                           ],
@@ -9935,7 +11107,10 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     final todayStr = _isoDate(DateTime.now());
     final data = LinkedHashMap<String, (double, bool)>.fromEntries(
       days.map((d) {
-        final count = _bookings.where((b) => b.date == _isoDate(d)).length.toDouble();
+        final count = _bookings
+            .where((b) => b.date == _isoDate(d))
+            .length
+            .toDouble();
         final isToday = _isoDate(d) == todayStr;
         return MapEntry(_weekday(d), (count, isToday));
       }),
@@ -9960,7 +11135,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                         color: AppPalette.accent.withOpacity(0.12),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: const Icon(Icons.bar_chart_rounded, color: AppPalette.accent, size: 16),
+                      child: const Icon(
+                        Icons.bar_chart_rounded,
+                        color: AppPalette.accent,
+                        size: 16,
+                      ),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
@@ -9981,15 +11160,24 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               ),
               const SizedBox(width: 8),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
                 decoration: BoxDecoration(
                   color: AppPalette.accent.withOpacity(0.10),
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: AppPalette.accent.withOpacity(0.20)),
+                  border: Border.all(
+                    color: AppPalette.accent.withOpacity(0.20),
+                  ),
                 ),
                 child: Text(
                   '$totalWeek total',
-                  style: _body(size: 11, color: AppPalette.accent, weight: FontWeight.w700),
+                  style: _body(
+                    size: 11,
+                    color: AppPalette.accent,
+                    weight: FontWeight.w700,
+                  ),
                 ),
               ),
             ],
@@ -10017,8 +11205,12 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                               count.toInt().toString(),
                               style: _body(
                                 size: 10,
-                                color: isToday ? AppPalette.accent : AppPalette.text2,
-                                weight: isToday ? FontWeight.w800 : FontWeight.w600,
+                                color: isToday
+                                    ? AppPalette.accent
+                                    : AppPalette.text2,
+                                weight: isToday
+                                    ? FontWeight.w800
+                                    : FontWeight.w600,
                               ),
                             ),
                           )
@@ -10033,7 +11225,10 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                           decoration: BoxDecoration(
                             gradient: isToday
                                 ? const LinearGradient(
-                                    colors: [AppPalette.accent, AppPalette.accent2],
+                                    colors: [
+                                      AppPalette.accent,
+                                      AppPalette.accent2,
+                                    ],
                                     begin: Alignment.bottomCenter,
                                     end: Alignment.topCenter,
                                   )
@@ -10045,11 +11240,15 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                                     begin: Alignment.bottomCenter,
                                     end: Alignment.topCenter,
                                   ),
-                            borderRadius: const BorderRadius.vertical(top: Radius.circular(6)),
+                            borderRadius: const BorderRadius.vertical(
+                              top: Radius.circular(6),
+                            ),
                             boxShadow: isToday
                                 ? [
                                     BoxShadow(
-                                      color: AppPalette.accent.withOpacity(0.35),
+                                      color: AppPalette.accent.withOpacity(
+                                        0.35,
+                                      ),
                                       blurRadius: 10,
                                       offset: const Offset(0, -3),
                                     ),
@@ -10065,14 +11264,19 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                             entry.key,
                             style: _body(
                               size: 10,
-                              color: isToday ? AppPalette.accent : AppPalette.text3,
-                              weight: isToday ? FontWeight.w800 : FontWeight.w500,
+                              color: isToday
+                                  ? AppPalette.accent
+                                  : AppPalette.text3,
+                              weight: isToday
+                                  ? FontWeight.w800
+                                  : FontWeight.w500,
                             ),
                           ),
                         ),
                         if (isToday)
                           Container(
-                            width: 4, height: 4,
+                            width: 4,
+                            height: 4,
                             margin: const EdgeInsets.only(top: 3),
                             decoration: const BoxDecoration(
                               color: AppPalette.accent,
@@ -10114,7 +11318,11 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   color: AppPalette.accent2.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Icon(Icons.donut_large_rounded, color: AppPalette.accent2, size: 16),
+                child: const Icon(
+                  Icons.donut_large_rounded,
+                  color: AppPalette.accent2,
+                  size: 16,
+                ),
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -10145,7 +11353,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   children: [
                     // Background track (Available segment color indicator)
                     SizedBox(
-                      width: 100, height: 100,
+                      width: 100,
+                      height: 100,
                       child: CircularProgressIndicator(
                         value: 1.0,
                         strokeWidth: 14,
@@ -10154,12 +11363,15 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                     ),
                     // Foreground progress (Occupied segment color indicator)
                     SizedBox(
-                      width: 100, height: 100,
+                      width: 100,
+                      height: 100,
                       child: CircularProgressIndicator(
                         value: progressValue,
                         strokeWidth: 14,
                         backgroundColor: Colors.transparent,
-                        valueColor: const AlwaysStoppedAnimation<Color>(AppPalette.accent),
+                        valueColor: const AlwaysStoppedAnimation<Color>(
+                          AppPalette.accent,
+                        ),
                       ),
                     ),
                     // Center label
@@ -10205,18 +11417,22 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                       '$availPct%',
                     ),
                     const SizedBox(height: 12),
-                    Container(
-                      height: 1,
-                      color: AppPalette.border,
-                    ),
+                    Container(height: 1, color: AppPalette.border),
                     const SizedBox(height: 10),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text('Total', style: _body(size: 11, color: AppPalette.text2)),
+                        Text(
+                          'Total',
+                          style: _body(size: 11, color: AppPalette.text2),
+                        ),
                         Text(
                           '$total rooms',
-                          style: _body(size: 11, color: AppPalette.text, weight: FontWeight.w700),
+                          style: _body(
+                            size: 11,
+                            color: AppPalette.text,
+                            weight: FontWeight.w700,
+                          ),
                         ),
                       ],
                     ),
@@ -10230,46 +11446,59 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     );
   }
 
-  Widget _legendDetailed(Color color, String label, String count, String pct) => Row(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Container(
-        width: 10, height: 10,
-        margin: const EdgeInsets.only(top: 2),
-        decoration: BoxDecoration(
-          color: color,
-          borderRadius: BorderRadius.circular(3),
-        ),
-      ),
-      const SizedBox(width: 8),
-      Expanded(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(label, style: _body(size: 12, color: AppPalette.text, weight: FontWeight.w600)),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+  Widget _legendDetailed(Color color, String label, String count, String pct) =>
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 10,
+            height: 10,
+            margin: const EdgeInsets.only(top: 2),
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(3),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Flexible(
-                  child: Text(
-                    count,
-                    style: _body(size: 10, color: AppPalette.text2),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                Text(
+                  label,
+                  style: _body(
+                    size: 12,
+                    color: AppPalette.text,
+                    weight: FontWeight.w600,
                   ),
                 ),
-                const SizedBox(width: 4),
-                Text(
-                  pct,
-                  style: _body(size: 10, color: color, weight: FontWeight.w700),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        count,
+                        style: _body(size: 10, color: AppPalette.text2),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      pct,
+                      style: _body(
+                        size: 10,
+                        color: color,
+                        weight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
-          ],
-        ),
-      ),
-    ],
-  );
+          ),
+        ],
+      );
 
   Widget _legend(Color color, String label) => Padding(
     padding: const EdgeInsets.only(bottom: 8),
@@ -10470,7 +11699,9 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
               children: [
                 for (int i = 0; i < children.length; i++)
                   Padding(
-                    padding: EdgeInsets.only(bottom: i == children.length - 1 ? 0 : 16),
+                    padding: EdgeInsets.only(
+                      bottom: i == children.length - 1 ? 0 : 16,
+                    ),
                     child: children[i],
                   ),
               ],

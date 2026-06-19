@@ -1,5 +1,6 @@
 import 'package:unispace/core/errors/exceptions.dart';
 import 'package:unispace/core/errors/failures.dart';
+import 'package:unispace/core/constants/app_constants.dart';
 import 'package:unispace/features/auth/data/datasources/auth_remote_datasource.dart';
 import 'package:unispace/features/auth/domain/entities/app_user.dart';
 import 'package:unispace/features/auth/domain/repositories/auth_repository.dart';
@@ -25,10 +26,7 @@ class AuthRepositoryImpl implements AuthRepository {
     required String password,
   }) async {
     try {
-      return await _remoteDataSource.signIn(
-        email: email,
-        password: password,
-      );
+      return await _remoteDataSource.signIn(email: email, password: password);
     } on AppAuthException catch (e) {
       throw AuthFailure(e.message);
     } on ServerException catch (e) {
@@ -41,12 +39,20 @@ class AuthRepositoryImpl implements AuthRepository {
     required String email,
     required String password,
     required String fullName,
+    required UserRole role,
+    required String department,
+    required String profileId,
+    required String phone,
   }) async {
     try {
       return await _remoteDataSource.signUp(
         email: email,
         password: password,
         fullName: fullName,
+        role: role,
+        department: department,
+        profileId: profileId,
+        phone: phone,
       );
     } on AppAuthException catch (e) {
       throw AuthFailure(e.message);
@@ -74,6 +80,7 @@ class AuthRepositoryImpl implements AuthRepository {
     String? fullName,
     String? phone,
     String? department,
+    String? profileId,
     String? avatarUrl,
   }) async {
     try {
@@ -86,6 +93,7 @@ class AuthRepositoryImpl implements AuthRepository {
         fullName: fullName,
         phone: phone,
         department: department,
+        profileId: profileId,
         avatarUrl: avatarUrl,
       );
     } on AppAuthException catch (e) {

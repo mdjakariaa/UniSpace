@@ -10,7 +10,7 @@ import 'package:unispace/core/widgets/custom_text_field.dart';
 import 'package:unispace/core/widgets/gradient_button.dart';
 import 'package:unispace/features/auth/presentation/providers/auth_provider.dart';
 
-/// Sign up screen with role auto-detection
+/// Sign up screen for student and teacher accounts
 class SignupScreen extends ConsumerStatefulWidget {
   const SignupScreen({super.key});
 
@@ -22,42 +22,39 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
+  final _departmentController = TextEditingController();
+  final _profileIdController = TextEditingController();
+  final _phoneController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   bool _obscurePassword = true;
   bool _obscureConfirm = true;
-  UserRole? _detectedRole;
+  UserRole _selectedDesignation = UserRole.student;
 
   @override
   void dispose() {
     _nameController.dispose();
     _emailController.dispose();
+    _departmentController.dispose();
+    _profileIdController.dispose();
+    _phoneController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
     super.dispose();
   }
 
-  void _onEmailChanged(String email) {
-    final domain = email.split('@').last.toLowerCase();
-    UserRole? role;
-    if (domain == AppConstants.studentDomain) {
-      role = UserRole.student;
-    } else if (domain == AppConstants.teacherDomain) {
-      role = UserRole.teacher;
-    } else if (domain == AppConstants.adminDomain) {
-      role = UserRole.admin;
-    }
-    if (role != _detectedRole) {
-      setState(() => _detectedRole = role);
-    }
-  }
-
   void _handleSignup() {
     if (_formKey.currentState?.validate() ?? false) {
-      ref.read(authProvider.notifier).signUp(
+      ref
+          .read(authProvider.notifier)
+          .signUp(
             email: _emailController.text.trim(),
             password: _passwordController.text,
             fullName: _nameController.text.trim(),
+            role: _selectedDesignation,
+            department: _departmentController.text.trim(),
+            profileId: _profileIdController.text.trim(),
+            phone: _phoneController.text.trim(),
           );
     }
   }
@@ -87,10 +84,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
           gradient: RadialGradient(
             center: Alignment(0.5, -0.3),
             radius: 1.5,
-            colors: [
-              Color(0xFF0D2040),
-              AppColors.background,
-            ],
+            colors: [Color(0xFF0D2040), AppColors.background],
           ),
         ),
         child: SafeArea(
@@ -123,16 +117,8 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
 
                   const SizedBox(height: 24),
 
-                  // Title
-                  Text('Create Account', style: AppTextStyles.h1)
-                      .animate(delay: 200.ms)
-                      .fadeIn()
-                      .slideY(begin: 0.2),
-
-                  const SizedBox(height: 8),
-
                   Text(
-                    'Join UniSpace to find and book study rooms',
+                    'Create your UniSpace account using your email',
                     style: AppTextStyles.bodyMedium,
                   ).animate(delay: 300.ms).fadeIn(),
 
@@ -154,69 +140,70 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
 
                   const SizedBox(height: 18),
 
-                  // Email with role detection
+                  // Email
                   CustomTextField(
                     controller: _emailController,
-                    hintText: 'your.email@student.lus.bd',
-                    labelText: 'Institutional Email',
+                    hintText: 'your.email@gmail.com',
+                    labelText: 'Email Address',
                     prefixIcon: Icons.email_outlined,
                     keyboardType: TextInputType.emailAddress,
-                    onChanged: _onEmailChanged,
                     validator: (value) {
-                      if (value == null || value.isEmpty) {
+                      final email = value?.trim() ?? '';
+                      if (email.isEmpty) {
                         return 'Please enter your email';
                       }
-                      if (!value.contains('@')) {
+                      if (!RegExp(
+                        r'^[^@\s]+@[^@\s]+\.[^@\s]+$',
+                      ).hasMatch(email)) {
                         return 'Please enter a valid email';
-                      }
-                      final domain = value.split('@').last.toLowerCase();
-                      if (domain != AppConstants.studentDomain &&
-                          domain != AppConstants.teacherDomain &&
-                          domain != AppConstants.adminDomain) {
-                        return 'Please use your institutional email';
                       }
                       return null;
                     },
                   ).animate(delay: 500.ms).fadeIn().slideX(begin: -0.1),
 
-                  // Role badge
-                  if (_detectedRole != null) ...[
-                    const SizedBox(height: 10),
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 300),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: _getRoleColor(_detectedRole!).withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(
-                          color: _getRoleColor(_detectedRole!).withOpacity(0.3),
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            _getRoleIcon(_detectedRole!),
-                            size: 16,
-                            color: _getRoleColor(_detectedRole!),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Role detected: ${_detectedRole!.displayName}',
-                            style: AppTextStyles.labelMedium.copyWith(
-                              color: _getRoleColor(_detectedRole!),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ).animate().fadeIn().scale(
-                          begin: const Offset(0.9, 0.9),
-                          curve: Curves.easeOutBack,
-                        ),
-                  ],
+                  const SizedBox(height: 18),
+
+                  _designationDropdown()
+                      .animate(delay: 550.ms)
+                      .fadeIn()
+                      .slideX(begin: -0.1),
+
+                  const SizedBox(height: 18),
+
+                  CustomTextField(
+                    controller: _departmentController,
+                    hintText: 'Computer Science',
+                    labelText: 'Department',
+                    prefixIcon: Icons.apartment_outlined,
+                    validator: (value) => value == null || value.trim().isEmpty
+                        ? 'Please enter your department'
+                        : null,
+                  ).animate(delay: 575.ms).fadeIn().slideX(begin: -0.1),
+
+                  const SizedBox(height: 18),
+
+                  CustomTextField(
+                    controller: _profileIdController,
+                    hintText: '111016',
+                    labelText: 'ID',
+                    prefixIcon: Icons.badge_outlined,
+                    validator: (value) => value == null || value.trim().isEmpty
+                        ? 'Please enter your ID'
+                        : null,
+                  ).animate(delay: 600.ms).fadeIn().slideX(begin: -0.1),
+
+                  const SizedBox(height: 18),
+
+                  CustomTextField(
+                    controller: _phoneController,
+                    hintText: '01700000000',
+                    labelText: 'Phone Number',
+                    prefixIcon: Icons.phone_outlined,
+                    keyboardType: TextInputType.phone,
+                    validator: (value) => value == null || value.trim().isEmpty
+                        ? 'Please enter your phone number'
+                        : null,
+                  ).animate(delay: 625.ms).fadeIn().slideX(begin: -0.1),
 
                   const SizedBox(height: 18),
 
@@ -283,7 +270,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
 
                   // Sign up button
                   GradientButton(
-                    text: 'Create Account',
+                    text: 'Sign Up',
                     isLoading: authState.status == AuthStatus.loading,
                     onPressed: _handleSignup,
                     icon: Icons.person_add_alt_1_rounded,
@@ -325,25 +312,33 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
     );
   }
 
-  Color _getRoleColor(UserRole role) {
-    switch (role) {
-      case UserRole.student:
-        return AppColors.accent;
-      case UserRole.teacher:
-        return AppColors.warning;
-      case UserRole.admin:
-        return AppColors.error;
-    }
-  }
-
-  IconData _getRoleIcon(UserRole role) {
-    switch (role) {
-      case UserRole.student:
-        return Icons.school_rounded;
-      case UserRole.teacher:
-        return Icons.person_rounded;
-      case UserRole.admin:
-        return Icons.admin_panel_settings_rounded;
-    }
+  Widget _designationDropdown() {
+    return DropdownButtonFormField<UserRole>(
+      initialValue: _selectedDesignation,
+      dropdownColor: AppColors.surface,
+      style: AppTextStyles.bodyLarge,
+      decoration: InputDecoration(
+        labelText: 'Designation',
+        prefixIcon: const Icon(Icons.work_outline_rounded),
+        labelStyle: AppTextStyles.labelMedium,
+        filled: true,
+        fillColor: AppColors.surfaceLight,
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: AppColors.glassBorder),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: AppColors.primary),
+        ),
+      ),
+      items: const [
+        DropdownMenuItem(value: UserRole.student, child: Text('Student')),
+        DropdownMenuItem(value: UserRole.teacher, child: Text('Teacher')),
+      ],
+      onChanged: (role) {
+        if (role != null) setState(() => _selectedDesignation = role);
+      },
+    );
   }
 }

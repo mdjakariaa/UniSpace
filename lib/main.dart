@@ -1329,6 +1329,30 @@ class WeeklyScheduleInfo {
   String get displayInfo => '$fullDayLabel • $timeSlot';
 }
 
+class _TeacherNextClassSlot {
+  final String roomName;
+  final String roomLocation;
+  final DateTime occurrenceDate;
+  final DateTime startDateTime;
+  final String scheduleLabel;
+  final String timeSlot;
+  final String status;
+  final String sourceLabel;
+  final WeeklyScheduleInfo? weeklySchedule;
+
+  const _TeacherNextClassSlot({
+    required this.roomName,
+    required this.roomLocation,
+    required this.occurrenceDate,
+    required this.startDateTime,
+    required this.scheduleLabel,
+    required this.timeSlot,
+    required this.status,
+    required this.sourceLabel,
+    this.weeklySchedule,
+  });
+}
+
 class ScheduleExceptionInfo {
   final String id;
   final String scheduleId;
@@ -3859,9 +3883,6 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
 
   Widget _studentPopularRoomCard(RoomInfo room) {
     final isAvailable = !room.isFull && !room.isPending;
-    final occupancyPercent = room.capacity > 0
-        ? ((room.capacity - room.available) / room.capacity * 100).round()
-        : 0;
 
     return InkWell(
       onTap: () => _openBooking(room),
@@ -3952,41 +3973,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                     overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Capacity: ${room.capacity}',
-                        style: _body(size: 10, color: AppPalette.text2),
-                      ),
-                      Text(
-                        '⭐ ${room.rating.toStringAsFixed(1)}',
-                        style: _body(
-                          size: 10,
-                          color: AppPalette.warn,
-                          weight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(
-                      value: room.capacity > 0
-                          ? (room.capacity - room.available) / room.capacity
-                          : 0,
-                      minHeight: 3,
-                      backgroundColor: AppPalette.surface2,
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                        occupancyPercent > 80
-                            ? AppPalette.danger
-                            : occupancyPercent > 50
-                            ? AppPalette.warn
-                            : AppPalette.accent3,
-                      ),
-                    ),
-                  ),
+                  _roomSlotUsageBar(room),
                 ],
               ),
             ),
@@ -4597,22 +4584,97 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     );
   }
 
-  WeeklyScheduleInfo? _latestUpcomingWeeklySchedule() {
-    final active = _weeklySchedules.where((s) => s.status == 'active').toList();
-    if (active.isEmpty) return null;
-    active.sort((a, b) {
-      final createdCmp = b.createdAt.compareTo(a.createdAt);
-      if (createdCmp != 0) return createdCmp;
+  bool _isExcludedNextClassStatus(String status) {
+    return const {'cancelled', 'completed', 'released', 'rejected'}
+        .contains(status.toLowerCase().trim());
+  }
 
-      final aDate = _nextActiveOccurrenceForSchedule(a);
-      final bDate = _nextActiveOccurrenceForSchedule(b);
-      int cmp = aDate.compareTo(bDate);
-      if (cmp != 0) return cmp;
-      final aStart = _scheduleDateTime(aDate, a.startTime);
-      final bStart = _scheduleDateTime(bDate, b.startTime);
-      return aStart.compareTo(bStart);
+  _TeacherNextClassSlot? _nextTeacherRoomSlot() {
+    final now = DateTime.now();
+    final today = _dateOnly(now);
+    final candidates = <_TeacherNextClassSlot>[];
+
+    for (final schedule in _weeklySchedules) {
+      if (schedule.status != 'active') continue;
+
+      final occurrenceDate = _nextActiveOccurrenceForSchedule(schedule);
+      final displayStatus = _displayStatusForSchedule(
+        schedule,
+        occurrenceDate: occurrenceDate,
+      );
+      if (_isExcludedNextClassStatus(displayStatus)) continue;
+
+      final endDateTime = _scheduleOccurrenceEnd(schedule, occurrenceDate);
+      if (!now.isBefore(endDateTime)) continue;
+
+      final startDateTime = _scheduleDateTime(
+        occurrenceDate,
+        schedule.startTime,
+      );
+      candidates.add(
+        _TeacherNextClassSlot(
+          roomName: schedule.roomName,
+          roomLocation: schedule.roomLocation,
+          occurrenceDate: occurrenceDate,
+          startDateTime: startDateTime,
+          scheduleLabel:
+              'Every ${schedule.dayName} (Next: ${_dateDisplay(_isoDate(occurrenceDate))})',
+          timeSlot: schedule.timeSlot,
+          status: displayStatus,
+          sourceLabel: 'Weekly Schedule',
+          weeklySchedule: schedule,
+        ),
+      );
+    }
+
+    for (final booking in _bookings) {
+      if (!booking.isTeacherRoomBooking) continue;
+      if (_isExcludedNextClassStatus(booking.status)) continue;
+
+      final bookingDate = DateTime.tryParse(booking.date);
+      if (bookingDate == null) continue;
+
+      final occurrenceDate = _dateOnly(bookingDate);
+      final startFallback = _parseScheduleTime(booking.startTime);
+      final endDateTime = _scheduleDateTime(
+        occurrenceDate,
+        booking.endTime,
+        fallback: startFallback,
+        fallbackHourOffset: 1,
+      );
+      if (!now.isBefore(endDateTime)) continue;
+
+      final startDateTime = _scheduleDateTime(
+        occurrenceDate,
+        booking.startTime,
+      );
+      candidates.add(
+        _TeacherNextClassSlot(
+          roomName: booking.roomName,
+          roomLocation: booking.roomLocation,
+          occurrenceDate: occurrenceDate,
+          startDateTime: startDateTime,
+          scheduleLabel: _dateDisplay(_isoDate(occurrenceDate)),
+          timeSlot: booking.timeRange,
+          status: booking.status,
+          sourceLabel: 'Teacher Booking',
+        ),
+      );
+    }
+
+    if (candidates.isEmpty) return null;
+
+    candidates.sort((a, b) {
+      final aIsToday = _dateOnly(a.occurrenceDate).isAtSameMomentAs(today);
+      final bIsToday = _dateOnly(b.occurrenceDate).isAtSameMomentAs(today);
+      if (aIsToday != bIsToday) return aIsToday ? -1 : 1;
+
+      final startCmp = a.startDateTime.compareTo(b.startDateTime);
+      if (startCmp != 0) return startCmp;
+
+      return a.roomName.compareTo(b.roomName);
     });
-    return active.first;
+    return candidates.first;
   }
 
   Widget _teacherDashboard() {
@@ -4654,7 +4716,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     final dateStr =
         '${weekdays[now.weekday - 1]}, ${months[now.month - 1]} ${now.day}, ${now.year}';
 
-    final nextClass = _latestUpcomingWeeklySchedule();
+    final nextClass = _nextTeacherRoomSlot();
     final ownRequests = _requests.length + _scheduleExceptions.length;
     final activeAssigned = _weeklySchedules
         .where(
@@ -4840,7 +4902,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'You have no upcoming admin-assigned classes.',
+                    'You have no upcoming room slots.',
                     style: _body(size: 12, color: AppPalette.text2),
                   ),
                 ],
@@ -4886,14 +4948,15 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     );
   }
 
-  Widget _teacherNextClassCard(WeeklyScheduleInfo schedule) {
-    final occurrenceDate = _nextActiveOccurrenceForSchedule(schedule);
-    final displayStatus = _displayStatusForSchedule(
-      schedule,
-      occurrenceDate: occurrenceDate,
-    );
-    final hasPendingSkip = displayStatus == 'cancellation_pending';
-    final cancellable = displayStatus == 'active';
+  Widget _teacherNextClassCard(_TeacherNextClassSlot slot) {
+    final weeklySchedule = slot.weeklySchedule;
+    final hasPendingSkip = slot.status == 'cancellation_pending';
+    final cancellable = weeklySchedule != null && slot.status == 'active';
+    final inactiveText = hasPendingSkip
+        ? (weeklySchedule == null
+              ? 'Cancellation pending'
+              : 'Skipped for this date')
+        : (weeklySchedule == null ? 'Active booking' : 'Active assignment');
     return Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
@@ -4940,7 +5003,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      schedule.roomName,
+                      slot.roomName,
                       style: GoogleFonts.plusJakartaSans(
                         fontSize: 18,
                         fontWeight: FontWeight.w800,
@@ -4949,13 +5012,13 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '📍 ${schedule.roomLocation}',
+                      '📍 ${slot.roomLocation}',
                       style: _body(size: 13, color: AppPalette.text2),
                     ),
                   ],
                 ),
               ),
-              _statusFromText(displayStatus),
+              _statusFromText(slot.status),
             ],
           ),
           const SizedBox(height: 18),
@@ -4971,7 +5034,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 Expanded(
                   child: _nextClassInfoItem(
                     Icons.calendar_today_outlined,
-                    'Every ${schedule.dayName} (Next: ${_dateDisplay(_isoDate(occurrenceDate))})',
+                    slot.scheduleLabel,
                   ),
                 ),
                 Container(
@@ -4983,7 +5046,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 Expanded(
                   child: _nextClassInfoItem(
                     Icons.schedule_outlined,
-                    schedule.timeSlot,
+                    slot.timeSlot,
                   ),
                 ),
               ],
@@ -4994,19 +5057,17 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                '🧰 Weekly Schedule',
+                '🧰 ${slot.sourceLabel}',
                 style: _body(size: 11, color: AppPalette.text3),
               ),
               cancellable
                   ? _actionButton(
                       'Request Skip',
                       AppPalette.warn,
-                      () => _showTeacherSkipDialog(schedule),
+                      () => _showTeacherSkipDialog(weeklySchedule!),
                     )
                   : Text(
-                      hasPendingSkip
-                          ? 'Skipped for this date'
-                          : 'Active assignment',
+                      inactiveText,
                       style: _body(
                         size: 12,
                         color: hasPendingSkip
@@ -5259,12 +5320,14 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                       scrollDirection: Axis.horizontal,
                       child: Row(
                         children: ['All', 'Active', 'Cancelled'].map((status) {
+                          final statusLabel =
+                              status == 'Active' ? 'Booked' : status;
                           final isSelected = _teacherStatusFilter == status;
                           return Padding(
                             padding: const EdgeInsets.only(right: 6),
                             child: ChoiceChip(
                               label: Text(
-                                status,
+                                statusLabel,
                                 style: _body(
                                   size: 12,
                                   color: isSelected

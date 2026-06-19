@@ -50,7 +50,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       if (next.error != null) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(next.error!),
+            content: Text(
+              next.error!,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
             backgroundColor: AppColors.error,
           ),
         );

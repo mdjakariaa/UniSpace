@@ -67,7 +67,13 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
       if (next.error != null) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(next.error!),
+            content: Text(
+              next.error!,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
             backgroundColor: AppColors.error,
           ),
         );
@@ -127,7 +133,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                   // Full name
                   CustomTextField(
                     controller: _nameController,
-                    hintText: 'John Doe',
+                    hintText: 'full Name',
                     labelText: 'Full Name',
                     prefixIcon: Icons.person_outline,
                     validator: (value) {
@@ -143,7 +149,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                   // Email
                   CustomTextField(
                     controller: _emailController,
-                    hintText: 'your.email@gmail.com',
+                    hintText: 'xyz@gmail.com',
                     labelText: 'Email Address',
                     prefixIcon: Icons.email_outlined,
                     keyboardType: TextInputType.emailAddress,

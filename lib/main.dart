@@ -471,7 +471,13 @@ class _AuthScreenState extends State<AuthScreen> {
   void _showAuthMessage(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message),
+        content: Text(
+          message,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
         backgroundColor: AppPalette.surface2,
         behavior: SnackBarBehavior.floating,
       ),
@@ -590,7 +596,7 @@ class _AuthScreenState extends State<AuthScreen> {
             _inputField(
               controller: _nameController,
               label: 'Full Name',
-              hint: 'e.g. Jakaria Hossain',
+              hint: 'full Name',
               icon: Icons.person_outline_rounded,
               validator: (value) => value == null || value.trim().isEmpty
                   ? 'Please enter your full name'
@@ -601,7 +607,7 @@ class _AuthScreenState extends State<AuthScreen> {
           _inputField(
             controller: _emailController,
             label: 'Email Address',
-            hint: 'your.email@gmail.com',
+            hint: 'xyz@gmail.com',
             icon: Icons.email_outlined,
             keyboardType: TextInputType.emailAddress,
             validator: (value) {
@@ -2298,6 +2304,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
   List<UserProfile> _users = [];
   List<RoomRequestInfo> _requests = [];
   List<SlotAvailability> _todaySlots = [];
+  Map<String, List<SlotAvailability>> _todaySlotsByRoom = {};
   List<EventInfo> _events = [];
   List<WeeklyScheduleInfo> _weeklySchedules = [];
   List<ScheduleExceptionInfo> _scheduleExceptions = [];
@@ -2655,16 +2662,26 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
           ? await _repo.fetchScheduleExceptions(null)
           : <ScheduleExceptionInfo>[];
       final List<SlotAvailability> todaySlots;
+      final Map<String, List<SlotAvailability>> todaySlotsByRoom;
       if (rooms.isNotEmpty) {
-        final todaySlotsList = await Future.wait(
+        final todaySlotEntries = await Future.wait(
           rooms.map(
-            (r) =>
-                _repo.fetchSlotAvailability(roomId: r.id, date: DateTime.now()),
+            (r) async => MapEntry(
+              r.id,
+              await _repo.fetchSlotAvailability(
+                roomId: r.id,
+                date: DateTime.now(),
+              ),
+            ),
           ),
         );
-        todaySlots = todaySlotsList.expand((s) => s).toList();
+        todaySlotsByRoom = {
+          for (final entry in todaySlotEntries) entry.key: entry.value,
+        };
+        todaySlots = todaySlotEntries.expand((entry) => entry.value).toList();
       } else {
         todaySlots = [];
+        todaySlotsByRoom = {};
       }
 
       if (!mounted) return;
@@ -2677,6 +2694,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         _requests = requests;
         _events = events;
         _todaySlots = todaySlots;
+        _todaySlotsByRoom = todaySlotsByRoom;
         _weeklySchedules = weeklySchedules;
         _scheduleExceptions = scheduleExceptions;
         _error = null;
@@ -2830,18 +2848,18 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       case UniRole.teacher:
         return [
           const NavEntry(
-            'teacher-rooms',
-            'Rooms',
-            'Browse Rooms',
-            iconData: Icons.meeting_room_rounded,
-            inactiveIconData: Icons.meeting_room_outlined,
-          ),
-          const NavEntry(
             'teacher-dashboard',
             '📊',
             'Dashboard',
             iconData: Icons.dashboard_rounded,
             inactiveIconData: Icons.dashboard_outlined,
+          ),
+          const NavEntry(
+            'teacher-rooms',
+            'Rooms',
+            'Browse Rooms',
+            iconData: Icons.meeting_room_rounded,
+            inactiveIconData: Icons.meeting_room_outlined,
           ),
           const NavEntry(
             'teacher-assigned-rooms',
@@ -4468,17 +4486,8 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                       spacing: 24,
                       children: [
                         _profileMetric('${_bookings.length}', 'Total Bookings'),
-                        _profileMetric('${_groups.length}', 'Active Groups'),
-                        _profileMetric(
-                          _rooms.isEmpty
-                              ? '0'
-                              : (_rooms
-                                            .map((r) => r.rating)
-                                            .reduce((a, b) => a + b) /
-                                        _rooms.length)
-                                    .toStringAsFixed(1),
-                          'Avg Room Rating',
-                        ),
+                        if (_role == UniRole.student)
+                          _profileMetric('${_groups.length}', 'Active Groups'),
                       ],
                     ),
                   ],
@@ -5433,7 +5442,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                     ],
                   ),
                 ),
-                _statusFromText(displayStatus),
+                _statusFromText(displayStatus, activeLabel: 'Booked'),
               ],
             ),
             const SizedBox(height: 14),
@@ -5461,7 +5470,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                 alignment: Alignment.centerRight,
                 child: cancellable
                     ? _actionButton(
-                        'Request Skip',
+                        'Cancel Slot',
                         AppPalette.warn,
                         () => _showTeacherSkipDialog(schedule),
                       )
@@ -5738,11 +5747,14 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
           _twoLine(s.roomName, s.roomLocation),
           _twoLine('Every ${s.dayName}', s.timeSlot),
           _plain(nextOccurrenceDisplay),
-          _statusFromText(displayStatus),
+          _statusFromText(
+            displayStatus,
+            activeLabel: teacherActions ? 'Booked' : null,
+          ),
           teacherActions
               ? (displayStatus == 'active'
                     ? _actionButton(
-                        'Request Skip',
+                        'Cancel Slot',
                         AppPalette.warn,
                         () => _showTeacherSkipDialog(s),
                       )
@@ -6158,21 +6170,16 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         LayoutBuilder(
           builder: (context, c) {
             final wide = c.maxWidth > 750;
-            final children = [_barChart(), _donutChart()];
             return wide
                 ? Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(flex: 6, child: children[0]),
-                      const SizedBox(width: 14),
-                      Expanded(flex: 4, child: children[1]),
+                      Expanded(child: _barChart()),
                     ],
                   )
                 : Column(
                     children: [
-                      children[0],
-                      const SizedBox(height: 14),
-                      children[1],
+                      _barChart(),
                     ],
                   );
           },
@@ -7266,7 +7273,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
             scrollDirection: Axis.horizontal,
             child: Row(
               children: [
-                _monitorChip('Active', activeCount, AppPalette.accent),
+                _monitorChip('Booked', activeCount, AppPalette.accent),
                 const SizedBox(width: 8),
                 _monitorChip('Cancelled', cancelledCount, AppPalette.danger),
               ],
@@ -7394,7 +7401,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                           ),
                         ),
                         child: Text(
-                          '$statusIcon ${isActive ? "Active" : "Cancelled"}',
+                          '$statusIcon ${isActive ? "Booked" : "Cancelled"}',
                           style: _body(
                             size: 11,
                             color: statusColor,
@@ -10261,6 +10268,65 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
       _runAction(() => _repo.deleteRoom(room.id), '🗑️ Room deleted!');
   }
 
+  Widget _roomSlotUsageBar(RoomInfo room) {
+    final slots = (_todaySlotsByRoom[room.id] ?? const <SlotAvailability>[])
+        .where((slot) => slot.totalSeats > 0)
+        .toList();
+    final totalSlots = slots.length;
+    final bookedSlots = slots
+        .where(
+          (slot) =>
+              slot.bookedSeats > 0 ||
+              slot.isBlockedByAdmin ||
+              slot.isFullyBooked,
+        )
+        .length;
+    final displayBooked = math.min(bookedSlots, totalSlots);
+    final fill = totalSlots == 0
+        ? 0.0
+        : (bookedSlots / totalSlots).clamp(0.0, 1.0).toDouble();
+    final fillPercent = (fill * 100).round();
+    final fillColor = fillPercent <= 50
+        ? AppPalette.accent3
+        : fillPercent <= 80
+        ? AppPalette.warn
+        : AppPalette.danger;
+    final label = totalSlots == 0
+        ? 'No slots available'
+        : '$displayBooked / $totalSlots slots booked';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: TweenAnimationBuilder<double>(
+            tween: Tween<double>(end: fill),
+            duration: const Duration(milliseconds: 350),
+            curve: Curves.easeOutCubic,
+            builder: (context, value, _) {
+              return LinearProgressIndicator(
+                value: value,
+                minHeight: 5,
+                backgroundColor: AppPalette.surface2,
+                valueColor: AlwaysStoppedAnimation<Color>(fillColor),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          label,
+          style: _body(
+            size: 11,
+            color: totalSlots == 0 ? AppPalette.text3 : fillColor,
+            weight: FontWeight.w700,
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _roomCard(RoomInfo room, {bool adminMode = false}) {
     const statusColor = AppPalette.accent3;
     return _SurfaceCard(
@@ -10328,11 +10394,6 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                       'Capacity: ${room.capacity}',
                       style: _body(size: 12, color: AppPalette.text2),
                     ),
-                    if (!adminMode)
-                      Text(
-                        '⭐ ${room.rating.toStringAsFixed(1)}',
-                        style: _body(size: 12, color: AppPalette.text2),
-                      ),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -10356,15 +10417,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(10),
-                  child: const LinearProgressIndicator(
-                    value: 1,
-                    minHeight: 5,
-                    backgroundColor: AppPalette.surface2,
-                    color: AppPalette.accent3,
-                  ),
-                ),
+                if (!adminMode) _roomSlotUsageBar(room),
                 if (!adminMode) ...[
                   const SizedBox(height: 14),
                   Wrap(
@@ -11297,209 +11350,6 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     );
   }
 
-  Widget _donutChart() {
-    final total = _rooms.length;
-    final available = _rooms.where((r) => !r.isFull && !r.isPending).length;
-    final booked = total - available;
-    final pct = total == 0 ? 0 : ((booked / total) * 100).round();
-    final availPct = total == 0 ? 0 : 100 - pct;
-    final progressValue = total == 0 ? 0.0 : booked / total;
-
-    return _SurfaceCard(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(7),
-                decoration: BoxDecoration(
-                  color: AppPalette.accent2.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Icon(
-                  Icons.donut_large_rounded,
-                  color: AppPalette.accent2,
-                  size: 16,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  'Room Usage',
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
-                    color: AppPalette.text,
-                    height: 1.18,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 18),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              // Donut ring
-              SizedBox(
-                width: 100,
-                height: 100,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    // Background track (Available segment color indicator)
-                    SizedBox(
-                      width: 100,
-                      height: 100,
-                      child: CircularProgressIndicator(
-                        value: 1.0,
-                        strokeWidth: 14,
-                        color: AppPalette.accent3.withOpacity(0.24),
-                      ),
-                    ),
-                    // Foreground progress (Occupied segment color indicator)
-                    SizedBox(
-                      width: 100,
-                      height: 100,
-                      child: CircularProgressIndicator(
-                        value: progressValue,
-                        strokeWidth: 14,
-                        backgroundColor: Colors.transparent,
-                        valueColor: const AlwaysStoppedAnimation<Color>(
-                          AppPalette.accent,
-                        ),
-                      ),
-                    ),
-                    // Center label
-                    Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          '$pct%',
-                          style: GoogleFonts.plusJakartaSans(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w800,
-                            color: AppPalette.text,
-                            height: 1,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'occupied',
-                          style: _body(size: 9, color: AppPalette.text2),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 18),
-              // Legend
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _legendDetailed(
-                      AppPalette.accent,
-                      'Occupied',
-                      '$booked rooms',
-                      '$pct%',
-                    ),
-                    const SizedBox(height: 12),
-                    _legendDetailed(
-                      AppPalette.accent3,
-                      'Available',
-                      '$available rooms',
-                      '$availPct%',
-                    ),
-                    const SizedBox(height: 12),
-                    Container(height: 1, color: AppPalette.border),
-                    const SizedBox(height: 10),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          'Total',
-                          style: _body(size: 11, color: AppPalette.text2),
-                        ),
-                        Text(
-                          '$total rooms',
-                          style: _body(
-                            size: 11,
-                            color: AppPalette.text,
-                            weight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _legendDetailed(Color color, String label, String count, String pct) =>
-      Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 10,
-            height: 10,
-            margin: const EdgeInsets.only(top: 2),
-            decoration: BoxDecoration(
-              color: color,
-              borderRadius: BorderRadius.circular(3),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: _body(
-                    size: 12,
-                    color: AppPalette.text,
-                    weight: FontWeight.w600,
-                  ),
-                ),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Flexible(
-                      child: Text(
-                        count,
-                        style: _body(size: 10, color: AppPalette.text2),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      pct,
-                      style: _body(
-                        size: 10,
-                        color: color,
-                        weight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      );
-
   Widget _legend(Color color, String label) => Padding(
     padding: const EdgeInsets.only(bottom: 8),
     child: Row(
@@ -11573,7 +11423,7 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     );
   }
 
-  Widget _statusFromText(String status) {
+  Widget _statusFromText(String status, {String? activeLabel}) {
     final color = status == 'cancelled' || status == 'rejected'
         ? AppPalette.danger
         : status == 'completed' || status == 'released'
@@ -11581,7 +11431,13 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         : status == 'pending' || status == 'cancellation_pending'
         ? AppPalette.warn
         : AppPalette.accent3;
-    return _statusPill(_statusLabel(status), color);
+    final label = _statusLabel(status);
+    return _statusPill(
+      activeLabel != null && status == 'active'
+          ? label.replaceFirst('Active', activeLabel)
+          : label,
+      color,
+    );
   }
 
   Widget _emptyState(String title, String subtitle) => _SurfaceCard(

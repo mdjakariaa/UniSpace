@@ -1353,6 +1353,16 @@ class _TeacherNextClassSlot {
   });
 }
 
+class _TeacherAssignedRoomItem {
+  final WeeklyScheduleInfo? schedule;
+  final BookingInfo? booking;
+
+  const _TeacherAssignedRoomItem.schedule(this.schedule) : booking = null;
+  const _TeacherAssignedRoomItem.booking(this.booking) : schedule = null;
+
+  bool get isDirectBooking => booking != null;
+}
+
 class ScheduleExceptionInfo {
   final String id;
   final String scheduleId;
@@ -1775,8 +1785,13 @@ class UniSpaceRepository {
     Map<String, UserProfile> users,
   ) async {
     dynamic query = client.from('bookings').select('*, rooms(*)');
-    if (role == UniRole.student || role == UniRole.teacher)
+    if (role == UniRole.student) {
       query = query.eq('user_id', currentUserId);
+    } else if (role == UniRole.teacher) {
+      query = query.or(
+        'user_id.eq.$currentUserId,teacher_id.eq.$currentUserId',
+      );
+    }
     final rows = await query
         .order('date', ascending: false)
         .order('start_time', ascending: false);
@@ -4717,7 +4732,6 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         '${weekdays[now.weekday - 1]}, ${months[now.month - 1]} ${now.day}, ${now.year}';
 
     final nextClass = _nextTeacherRoomSlot();
-    final ownRequests = _requests.length + _scheduleExceptions.length;
     final activeAssigned = _weeklySchedules
         .where(
           (s) =>
@@ -4796,8 +4810,6 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                     Row(
                       children: [
                         _dashboardStatBadge('🏫 $activeAssigned Active Rooms'),
-                        const SizedBox(width: 8),
-                        _dashboardStatBadge('⏳ $ownRequests Total Requests'),
                       ],
                     ),
                   ],
@@ -5198,44 +5210,85 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
     );
   }
 
-  List<WeeklyScheduleInfo> _filteredTeacherSchedules() {
-    List<WeeklyScheduleInfo> list = _weeklySchedules;
-    // Building filter
-    if (_teacherBuildingFilter != 'All') {
-      final query = _teacherBuildingFilter.toLowerCase().trim();
-      if (query == 'other') {
-        list = list
-            .where(
-              (s) =>
-                  !s.roomLocation.toLowerCase().contains('rkb') &&
-                  !s.roomLocation.toLowerCase().contains('rab'),
-            )
-            .toList();
-      } else {
-        list = list
-            .where((s) => s.roomLocation.toLowerCase().contains(query))
-            .toList();
-      }
-    }
-    // Status filter
-    if (_teacherStatusFilter != 'All') {
-      final queryStatus = _teacherStatusFilter.toLowerCase();
-      list = list
+  List<_TeacherAssignedRoomItem> _filteredTeacherAssignedRoomItems() {
+    final items = <_TeacherAssignedRoomItem>[
+      ..._weeklySchedules.map(_TeacherAssignedRoomItem.schedule),
+      ..._bookings
           .where(
-            (s) => _displayStatusForSchedule(s).toLowerCase() == queryStatus,
+            (booking) =>
+                booking.isTeacherRoomBooking &&
+                booking.bookedByAdminId == null &&
+                (booking.userId == widget.user.id ||
+                    booking.teacherId == widget.user.id),
           )
-          .toList();
+          .map(_TeacherAssignedRoomItem.booking),
+    ];
+
+    return items.where((item) {
+      if (!_matchesTeacherAssignedBuildingFilter(item)) return false;
+      if (!_matchesTeacherAssignedDateFilter(item)) return false;
+      return _matchesTeacherAssignedStatusFilter(item);
+    }).toList();
+  }
+
+  bool _matchesTeacherAssignedBuildingFilter(_TeacherAssignedRoomItem item) {
+    if (_teacherBuildingFilter == 'All') return true;
+
+    final location =
+        item.schedule?.roomLocation ?? item.booking?.roomLocation ?? '';
+    final building =
+        item.booking?.roomBuilding ?? item.schedule?.roomLocation ?? location;
+    final query = _teacherBuildingFilter.toLowerCase().trim();
+    final haystack = '$location $building'.toLowerCase();
+
+    if (query == 'other') {
+      return !haystack.contains('rkb') && !haystack.contains('rab');
     }
-    // Date filter
-    if (_teacherDateFilter != null) {
-      final dow = _teacherDateFilter!.weekday % 7;
-      list = list.where((s) => s.dayOfWeek == dow).toList();
+    return haystack.contains(query);
+  }
+
+  bool _matchesTeacherAssignedDateFilter(_TeacherAssignedRoomItem item) {
+    final filterDate = _teacherDateFilter;
+    if (filterDate == null) return true;
+
+    final schedule = item.schedule;
+    if (schedule != null) {
+      return schedule.dayOfWeek == filterDate.weekday % 7;
     }
-    return list;
+
+    final bookingDate = DateTime.tryParse(item.booking?.date ?? '');
+    if (bookingDate == null) return false;
+    return _dateOnly(bookingDate) == _dateOnly(filterDate);
+  }
+
+  bool _matchesTeacherAssignedStatusFilter(_TeacherAssignedRoomItem item) {
+    switch (_teacherStatusFilter) {
+      case 'All':
+        return true;
+      case 'My Bookings':
+        return item.isDirectBooking;
+      case 'Cancelled':
+        final schedule = item.schedule;
+        if (schedule != null) {
+          return _displayStatusForSchedule(schedule).toLowerCase() ==
+              'cancelled';
+        }
+        final booking = item.booking;
+        return booking != null && _bookingIsCancelled(booking);
+      case 'Active':
+        final schedule = item.schedule;
+        return schedule != null &&
+            _displayStatusForSchedule(schedule).toLowerCase() == 'active';
+      default:
+        final schedule = item.schedule;
+        return schedule != null &&
+            _displayStatusForSchedule(schedule).toLowerCase() ==
+                _teacherStatusFilter.toLowerCase();
+    }
   }
 
   Widget _teacherAssignedRoomsPage() {
-    final filtered = _filteredTeacherSchedules();
+    final filtered = _filteredTeacherAssignedRoomItems();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -5319,7 +5372,12 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                     child: SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
                       child: Row(
-                        children: ['All', 'Active', 'Cancelled'].map((status) {
+                        children: const [
+                          'All',
+                          'Active',
+                          'Cancelled',
+                          'My Bookings',
+                        ].map((status) {
                           final statusLabel =
                               status == 'Active' ? 'Booked' : status;
                           final isSelected = _teacherStatusFilter == status;
@@ -5443,15 +5501,20 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
         // Schedules List
         filtered.isEmpty
             ? _emptyState(
-                'No assigned weekly schedules match filters',
-                'Change your building, status, or date filters to find assigned weekly schedules.',
+                'No assigned rooms match filters',
+                'Change your building, status, or date filters to find assigned rooms.',
               )
             : ListView.builder(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 itemCount: filtered.length,
                 itemBuilder: (context, index) {
-                  return _teacherAssignedScheduleCard(filtered[index]);
+                  final item = filtered[index];
+                  final schedule = item.schedule;
+                  if (schedule != null) {
+                    return _teacherAssignedScheduleCard(schedule);
+                  }
+                  return _teacherAssignedBookingCard(item.booking!);
                 },
               ),
       ],
@@ -5542,6 +5605,98 @@ class _UniSpaceDashboardState extends State<UniSpaceDashboard> {
                             ? 'Skipped for this date'
                             : 'No action available',
                       ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _teacherAssignedBookingCard(BookingInfo booking) {
+    final status = _bookingCurrentStatus(booking);
+    final isCancelled = _bookingIsCancelled(booking);
+    final cancellable = !isCancelled && !_bookingIsCompleted(booking);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: _SurfaceCard(
+        padding: const EdgeInsets.all(18),
+        borderColor: AppPalette.accent3.withOpacity(0.28),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 46,
+                  height: 46,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: AppPalette.accent3.withOpacity(0.13),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: AppPalette.accent3.withOpacity(0.28),
+                    ),
+                  ),
+                  child: const Text('📌', style: TextStyle(fontSize: 22)),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _heading(booking.roomName, size: 16),
+                      const SizedBox(height: 4),
+                      Text(
+                        '📍 ${booking.roomLocation}',
+                        style: _body(size: 12, color: AppPalette.text2),
+                      ),
+                    ],
+                  ),
+                ),
+                _statusFromText(status, activeLabel: 'Booked'),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 16,
+              runSpacing: 8,
+              children: [
+                Text(
+                  '📅 ${booking.displayDate}',
+                  style: _body(size: 12, color: AppPalette.text2),
+                ),
+                Text(
+                  '🕓 ${booking.timeRange}',
+                  style: _body(size: 12, color: AppPalette.text2),
+                ),
+                Text(
+                  '🧰 Teacher Booking',
+                  style: _body(size: 12, color: AppPalette.text2),
+                ),
+                if (booking.purpose.trim().isNotEmpty)
+                  Text(
+                    '📝 ${booking.purpose}',
+                    style: _body(size: 12, color: AppPalette.text2),
+                  ),
+              ],
+            ),
+            if (!isCancelled) ...[
+              const SizedBox(height: 14),
+              Align(
+                alignment: Alignment.centerRight,
+                child: cancellable
+                    ? _actionButton(
+                        'Cancel Slot',
+                        AppPalette.warn,
+                        () => _runAction(
+                          () => _repo.cancelBooking(booking.id),
+                          '✅ Slot cancelled.',
+                        ),
+                      )
+                    : _plain('No action available'),
               ),
             ],
           ],
